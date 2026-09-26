@@ -1,0 +1,47 @@
+[project]
+name = "web-platform-rag"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.43.102",
+    "chromadb>=1.5.9",
+    "langchain>=1.4.2",
+    "langchain-aws>=1.7.9",
+    "langchain-community>=0.4.2",
+    "langchain-core>=1.6.5",
+    "langchain-text-splitters>=1.1.2",
+    "pillow>=12.3.0",
+    "pydantic-settings>=2.15.0",
+    "pymysql>=1.2.3",
+    "pypdf>=6.19.0",
+    "pypdfium2>=5.13.0",
+    "python-dotenv>=1.2.3",
+]
+
+[dependency-groups]
+dev = [
+    "poethepoet>=0.48.0",
+    "pytest>=9.1.1",
+    "pytest-mock>=3.15.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The project isn't installed as a package, so put the repo root on the path for `import app`.
+pythonpath = ["."]
+markers = [
+    "integration: needs docker compose services (MinIO, ChromaDB); run with `uv run pytest -m integration`",
+]
+# Unit tests only by default; `-m integration` on the command line overrides this.
+addopts = "-m 'not integration'"
+
+# Task shortcuts (like `npm run`): `uv run poe <task>`, or `uv run poe` to list them.
+[tool.poe.tasks]
+chroma = { cmd = "python scripts/show_chroma.py", help = "Print every record in the ChromaDB collection" }
+verify = { cmd = "python scripts/verify_services.py", help = "Check Docker, MinIO and ChromaDB health" }
+test = { cmd = "pytest", help = "Run unit tests (add -m integration for integration tests)" }
+pipeline = { cmd = "python -m app.happy_path", help = "Run the happy-path RAG pipeline (built step by step)" }
+planner = { cmd = "python -m app.planner", help = "Print the query plan for sample prompts" }
+hybrid = { cmd = "python -m app.hybrid_search", help = "Plan -> SQL candidates -> search their documents -> ranked assets" }
+eval = { cmd = "python -m app.eval", help = "Score search + answers against evals/questions.json (run pipeline first)" }
+demo = { cmd = "python app_example.py", help = "Run the end-to-end ingestion + search demo" }

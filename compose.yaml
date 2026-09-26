@@ -1,0 +1,38 @@
+services:
+  minio:
+    image: quay.io/minio/aistor/minio:latest
+    container_name: overstone-minio
+    restart: unless-stopped
+    command:
+      - minio
+      - server
+      - /mnt/data
+      - --license
+      - /minio.license
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./minio-data:/mnt/data
+      - ./minio.license:/minio.license:ro
+    networks:
+      - overstone-rag-network
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: overstone-chromadb
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/data
+    networks:
+      - overstone-rag-network
+
+networks:
+  overstone-rag-network:
+    name: overstone-rag-network
+
+volumes:
+  chroma_data:
+    name: overstone-chroma-data

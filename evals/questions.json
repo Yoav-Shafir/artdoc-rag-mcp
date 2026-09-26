@@ -1,0 +1,50 @@
+[
+  {
+    "question": "What is the invoice number?",
+    "expected_file": "ZOST0001.pdf",
+    "must_contain": ["EPA.09.19.24"],
+    "notes": "Simple lookup."
+  },
+  {
+    "question": "Who issued the invoice and on what date?",
+    "expected_file": "ZOST0001.pdf",
+    "must_contain": ["Esthella Provas", "September 19"],
+    "notes": "Catches the misspelling Nova produced in earlier runs (Provias, Provaz)."
+  },
+  {
+    "question": "What discount was given on the Yoshitomo Nara drawing?",
+    "expected_file": "ZOST0001.pdf",
+    "must_contain": ["12,500"],
+    "notes": "Lookup of a figure inside a price table."
+  },
+  {
+    "question": "Where did the Dutch ship drawings come from before this sale?",
+    "expected_file": "YONA0004_2.pdf",
+    "must_contain": ["John MacGowan", "Seiferheld"],
+    "notes": "Paraphrase: the document says 'Provenance' and 'Frigates', not 'come from' or 'ship drawings'."
+  },
+  {
+    "question": "What lot number was the Zora Staack print at the Doyle sale?",
+    "expected_file": "YONA0004_2.pdf",
+    "must_contain": ["123"],
+    "notes": "Page 1 of the proposal; page 2 has a different lot (46), so the right page matters."
+  },
+  {
+    "question": "How much sales tax was charged on proposal 0017?",
+    "expected_file": "YONA0004_2.pdf",
+    "must_contain": ["895.23"],
+    "notes": "Only in the last chunk of page 2 (after the provenance), so retrieval must find that exact chunk."
+  },
+  {
+    "question": "What is the grand total of proposal 0017?",
+    "expected_file": "YONA0004_2.pdf",
+    "must_contain": ["0.00"],
+    "notes": "Trap: the document also shows a Proposal Amount of 13,684.23; the grand total after the deposit is 0.00."
+  },
+  {
+    "question": "What is the insurance value of the van de Velde drawings?",
+    "expected_file": null,
+    "must_contain": ["couldn't find"],
+    "notes": "No answer exists in the documents. The system prompt tells the model to say it couldn't find it, not guess."
+  }
+]

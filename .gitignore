@@ -1,0 +1,26 @@
+.env
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+minio.license
+minio-data/
+*.egg-info/
+localstack-data/
+
+# Tool caches
+.ruff_cache/
+
+# Personal Claude Code settings (per machine; .claude/settings.json would be shared)
+.claude/settings.local.json
+
+# Local snapshot of Chroma's database (from `docker cp overstone-chromadb:/data/chroma.sqlite3 .`)
+chroma.sqlite3
+
+# OS / editor files
+.DS_Store
+.idea/
+
+# Test coverage output
+.coverage
+htmlcov/
