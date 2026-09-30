@@ -23,13 +23,16 @@ from app.config import config
 
 logger = logging.getLogger(__name__)
 
-# All files of an account's (non-deleted) assets.
+# All PDF files of an account's (non-deleted) assets. Image categories are skipped.
+# '%%' is a literal '%' for pymysql, so MySQL receives LIKE '%.pdf'.
 _FILES_FOR_ACCOUNT_SQL = """
     SELECT f.fileId AS file_id, f.name, f.category, f.updatedAt AS updated_at,
            a.id AS asset_id, a.name AS asset_name, a.accountId AS account_id
     FROM asset a
     JOIN file f ON f.entityType = 'ASSET' AND f.entityId = a.id
     WHERE a.accountId = %(account_id)s AND a.deleted = 0
+      AND f.category NOT IN ('IMAGES', 'CR_IMAGE')
+      AND f.fileId LIKE '%%.pdf'
     ORDER BY f.fileId
 """
 
@@ -44,11 +47,12 @@ _LOOKUP_FILE_SQL = """
 """
 
 # Every account that has at least one file on a (non-deleted) asset.
+# {account_filter} is empty, or limits the result to one account (pilot runs).
 _ACCOUNT_IDS_SQL = """
     SELECT DISTINCT a.accountId AS account_id
     FROM asset a
     JOIN file f ON f.entityType = 'ASSET' AND f.entityId = a.id
-    WHERE a.accountId IS NOT NULL AND a.deleted = 0
+    WHERE a.accountId IS NOT NULL AND a.deleted = 0 {account_filter}
     ORDER BY account_id
 """
 
@@ -116,9 +120,14 @@ class Database:
         except pymysql.MySQLError as e:
             raise DatabaseError(f"Database query failed: {e}") from e
 
-    def list_account_ids(self) -> list[int]:
-        """Every account that owns at least one file."""
-        return [row["account_id"] for row in self._query(_ACCOUNT_IDS_SQL)]
+    def list_account_ids(self, account_id: Optional[int] = None) -> list[int]:
+        """Every account that owns at least one file, or only `account_id` if given."""
+        if account_id is None:
+            sql, params = _ACCOUNT_IDS_SQL.format(account_filter=""), None
+        else:
+            sql = _ACCOUNT_IDS_SQL.format(account_filter="AND a.accountId = %(account_id)s")
+            params = {"account_id": account_id}
+        return [row["account_id"] for row in self._query(sql, params)]
 
     def files_for_account(self, account_id: int) -> list[FileRecord]:
         """All file records owned by an account, loaded in one query."""

@@ -43,5 +43,6 @@ test = { cmd = "pytest", help = "Run unit tests (add -m integration for integrat
 pipeline = { cmd = "python -m app.happy_path", help = "Run the happy-path RAG pipeline (built step by step)" }
 planner = { cmd = "python -m app.planner", help = "Print the query plan for sample prompts" }
 hybrid = { cmd = "python -m app.hybrid_search", help = "Plan -> SQL candidates -> search their documents -> ranked assets" }
+batch = { cmd = "python -m app.batch_ingestion", help = "Daily ingestion job (AWS Batch): new PDFs, remove deleted files" }
 eval = { cmd = "python -m app.eval", help = "Score search + answers against evals/questions.json (run pipeline first)" }
 demo = { cmd = "python app_example.py", help = "Run the end-to-end ingestion + search demo" }
