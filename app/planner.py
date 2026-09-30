@@ -150,6 +150,10 @@ class AssetFilters(BaseModel):
 
     # Runs before Pydantic checks the enum: fixes near-misses like "POST-WAR"
     # instead of failing or dropping them. See closest_value() above.
+    
+    # This is a Pydantic validator that fixes the user's input before validation.
+    # Runs on medium and period fields
+    # mode="before" means run BEFORE Pydantic validates the enum
     @field_validator("medium", "period", mode="before")
     @classmethod
     def _closest_allowed(cls, value, info: ValidationInfo):
@@ -159,15 +163,19 @@ class AssetFilters(BaseModel):
 class QueryPlan(BaseModel):
     """How to handle one user prompt."""
 
+    # The LLM must choose one of the two options
     kind: Literal["answer", "list"] = Field(
+        # A description to guide the LLM
         description="'list' when the user wants a list of assets ('show me all ...', "
         "'which assets ...'); 'answer' when they ask a question about the documents."
     )
     filters: AssetFilters = Field(
+        # If the LLM doesn't fill it, use default_factory=AssetFilters to create an empty AssetFilters() instance
         default_factory=AssetFilters,
         description="Filters on asset columns. All empty if the prompt names none.",
     )
     document_query: str | None = Field(
+        # If the LLM doesn't fill it, default to None
         None,
         description="Everything the prompt asks about the *content of documents* "
         "(provenance, invoices, reports, ...), rewritten as a short search query. "
@@ -195,6 +203,12 @@ def plan(prompt: str, llm) -> QueryPlan:
     # with_structured_output sends the QueryPlan schema (including every allowed
     # enum value) to the LLM as a "tool", and parses its reply back into a
     # validated QueryPlan object.
+
+    # tells the LLM: "Your response must be valid JSON with these fields:
+    # kind: 'answer' or 'list'
+    # filters: (object with artist, year, etc.)
+    # document_query: (string) "
+    
     planner = llm.with_structured_output(QueryPlan)
     return planner.invoke([SystemMessage(PLANNER_PROMPT), HumanMessage(prompt)])
 
@@ -208,7 +222,7 @@ SAMPLE_PROMPTS = [
     "Who issued the invoice for Half of You?",
 ]
 
-
+# uv run poe planner
 def main():
     """Print the plan for each sample prompt, to see how the LLM splits it."""
     llm = make_llm()

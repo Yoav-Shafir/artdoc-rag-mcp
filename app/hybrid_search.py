@@ -1,13 +1,11 @@
-"""Hybrid search: database filters + document search, for "show me all ..." prompts.
+"""Hybrid search: filtered list queries with ranking.
 
-    prompt -> plan() -> candidate_asset_ids() -> search_candidates() -> rank_assets()
-
-1. The planner splits the prompt into exact filters and a document query.
-2. SQL finds the account's assets that pass the filters (the candidates).
-3. Chroma searches only the candidates' chunks, all of them (not just the top 3).
-4. Chunks are grouped by asset; each asset is scored by its best chunk.
-The result is exact on the filters and ranked on the document condition.
-See docs/HYBRID_QUERY_STRATEGY.md.
+User asks a filtered list query ("Show me Picasso works whose provenance includes Sotheby's")
+Planner splits it into filters + document query
+SQL finds candidate assets (exact filtering)
+Vector search finds chunks only from those candidates (ranked within)
+Answer shows ranked assets with evidence
+This is what production would use for complex queries
 
 Run: uv run poe hybrid
 """
@@ -72,6 +70,7 @@ def main():
     embeddings, collection = make_embeddings(), make_collection()
 
     # 1. Plan: split the prompt into filters + document query.
+    # query_plan is a QueryPlan with: filters (AssetFilters), document_query (str), kind ('list' or 'answer')
     query_plan = plan(PROMPT, llm)
     print(f"PROMPT: {PROMPT}")
     print(f"  filters:        {query_plan.filters.model_dump(exclude_none=True, mode='json')}")

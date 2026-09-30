@@ -74,6 +74,34 @@ The numbered phases below remain the reference for the full design; the happy-pa
 
 **OCR fallback to a vision LLM:** scanned pages are OCR'd with Textract `AnalyzeDocument` + LAYOUT (built). A future option is to route pages where Textract's confidence is low (handwriting, faint or photographed pages) to the Bedrock vision LLM to transcribe instead. Keep Textract first for exact typed text: LLMs may 'correct' names (cf. "Provias"). Missing-in-storage handling, parse and embedding failures, the unchanged check (etag + `catalogUpdatedAt`), per-account cleanup of stale chunks, fail-closed errors, image/scan support, tests, scheduled runs.
 
+### Idea: sales-table tool (later)
+
+The platform has a `sales` table with about 5 years of auction-house art sales. It is structured, numeric data (artist, title, auction house, date, price, medium), and typical questions about it are **calculations over many rows** (averages, counts, trends). Vector search can't compute those, so this data should be reached through **SQL tools the LLM can call**, not through RAG.
+
+**Tool sketch:** LLM tool calling (`llm.bind_tools([...])`) with typed parameters; the LLM decides whether a question needs market data and fills in the parameters, our code runs parameterized SQL (the LLM never writes SQL), and the LLM answers citing the sales it used (house, date, lot, price).
+- `search_sales(artist, medium, auction_house, year_from, year_to, price_min, price_max, limit)` → matching sales
+- `sales_stats(same filters, group_by="year" | "auction_house")` → count, average, median, min, max
+
+**Questions that benefit from documents (RAG) + market sales data:**
+
+| Kind of question | Example | Documents (RAG) supply | Sales table supplies |
+|---|---|---|---|
+| **Did I pay a fair price?** | "How does what we paid for Guitare sur une table compare to the market?" | The invoice: £381,848.75, Sotheby's, June 2013 | Recent Picasso charcoal drawings: median price, range |
+| **Is the valuation still realistic?** | "Is the 2021 valuation of Interieur still in line with recent sales?" | The valuation report's figure and date | Sales of the artist and medium since that date |
+| **Insurance cover** | "Are any of my works under-insured?" | Insured values from insurance policies | Current market levels for each artist |
+| **Checking the provenance story** | "The invoice says it was sold at Sotheby's in 2013. Is that sale in the records?" | The claimed sale: house, date, lot | The actual auction record, to confirm or contradict |
+| **Checking the comparables** | "Are the comparables in this valuation report representative?" | The comps the appraiser chose | All relevant sales, to spot cherry-picking |
+| **Timing and liquidity** | "Is the market for Picasso drawings going up or down?" | Which Picasso drawings the account owns | Price and volume trend by year |
+| **Portfolio view** | "Which artists in my collection have risen most since I bought?" | Purchase prices and dates across invoices | Current prices per artist |
+
+**The common pattern:** a single question needs **two lookups and a comparison**: facts about the account's own asset from its documents, and the market around it from the sales table. That's why the sales data should be a **tool available while answering**, not a separate search mode: the LLM retrieves the invoice or valuation from the documents, calls `sales_stats(...)` for the market, then compares the two in its answer, citing both sources.
+
+**Open decisions:**
+- Confirm the table is shared market data (no `accountId` filter, unlike assets).
+- Plug it into the answer flow as a tool, so one question can mix documents and market data.
+- The same name/enum mapping issues as the planner: artist names ("Picasso" vs "Pablo Picasso"), medium, auction-house values.
+- First step when resumed: inspect the `sales` table's columns (read-only) to design the tool parameters.
+
 ---
 
 ## Progress tracker
@@ -744,3 +772,4 @@ Decide per category, add an `ImageParser` / OCR step to the registry, and watch 
 | 2026-09-26 | (OCR built) | `parse_pdf(pdf_bytes, file_id, textract)` is now a for loop: pypdf text, or, when a page is empty, `ocr_page()`: pypdfium2 render (scale 2) → Textract `analyze_document(FeatureTypes=["LAYOUT"])` → text rebuilt from the LAYOUT_* blocks' child LINEs in reading order (paragraphs joined by a blank line). `make_textract()` client. The commented list-comprehension/for-loop teaching block was removed (the for loop is now the real code). The vision-LLM fallback is documented under *Later*. Run: 13 scanned pages OCR'd, the collection holds 22 chunks. **Quality:** the Sotheby's invoice is excellent, LAYOUT fixed the column mixing (buyer Georg von Opel; lot 31 Picasso 'Guitare sur une table', 1912; hammer £300,000; total £381,848.75; 19 June 2013). The **handwritten** French certificate by Maya Widmaier Picasso is garbled ("Maya Widmaies Prasso", "Culsisme" for Cubisme): exactly the case for the future vision-LLM fallback. 2 pages returned 0 chars (likely images/blank). |
 | 2026-09-26 | (vision test) | One-off test, no code change: Nova 2 Lite (vision, via boto3 `converse` with an image block) transcribed the handwritten Widmaier Picasso certificate (page 1, 320 in / 144 out tokens). Much better than Textract ("Cubisme", "l'automne 1912", "Widmaier Picasso", "œuvre de mon père, Pablo Picasso") but still wrong on some words ("Draya" for Maya, "Louisippe'" for Soussignée) and it **ignored the `[?]` instruction** (guessed instead). The user decided: no vision LLM for now. Worth testing a stronger vision model (Nova Pro / Claude) when this is revisited. |
 | 2026-09-26 | Hybrid step 5 (search + rank) | `app/hybrid_search.py` (`uv run poe hybrid`): `search_candidates()` (Chroma `where` accountId + `assetId $in` candidates, n = count of their chunks via `collection.get(include=[])`), `rank_assets()` (best chunk per asset, then no-doc candidates), `main()` chains plan → `candidate_asset_ids` → search → rank for account 7. Result for "Show me Picasso works whose provenance includes Sotheby's": filters `artist=Pablo Picasso`, document_query `Sotheby's`, 5 candidates; **#1 asset 2566 'Guitare sur une table' (score 0.503), evidence = the OCR'd Sotheby's invoice**; 4 assets with no documents listed after. The first end-to-end hybrid query works. Next ideas: batch the display-name lookups, a second asset with documents to test ranking, show the applied filters to the user, planner evals. |
+| 2026-09-26 | (idea, later) | **Sales-table tool** for the platform's `sales` table (about 5 years of auction sales): SQL tools the LLM can call, combined with RAG in the answer flow. Full write-up (tool sketch, question types, the common pattern, open decisions) in the section *Idea: sales-table tool (later)* above. |

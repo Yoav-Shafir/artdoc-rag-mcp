@@ -56,14 +56,14 @@ def parse_pdf(pdf_bytes: bytes, file_id: str, textract) -> list[Document]:
     """Step 2: turn PDF bytes into one LangChain Document per page.
 
     Pages with a text layer are read directly with pypdf. Scanned pages (images
-    of paper, no text layer) come back empty from pypdf, so they're sent to OCR.
+    of paper, no text layer) come back empty from pypdf, so they're sent to OCR (Optical Character Recognition).
     """
     reader = PdfReader(io.BytesIO(pdf_bytes))
     documents = []
     for page_number, page in enumerate(reader.pages, start=1):
-        text = page.extract_text()
+        text = page.extract_text()  # Extract text from the page's text layer (if it has one)
         if not text.strip():
-            # No text layer: this page is a scan. Read it with OCR instead.
+            # No text layer: this page is a scan. Read it with OCR (Optical Character Recognition) instead.
             text = ocr_page(textract, pdf_bytes, page_number)
             print(f"    page {page_number}: scanned, read with Textract OCR ({len(text)} chars)")
         documents.append(
@@ -186,11 +186,15 @@ def search(db, collection, embeddings, question: str, account_id: int, n_results
 
 
 def answer(llm, question: str, hits: list[dict]) -> str:
-    """Step 7: ask the LLM to answer from the numbered, labelled search hits."""
+    """Generate an answer from the search results with citations."""
+    # Format each search result as "[1] (fileName, page N)\nchunk text"
+    # Example: "[1] (ZOST0001.pdf, page 1)\nThe invoice was issued by Esthella Provas..."
     sources = "\n\n".join(
         f"[{number}] ({hit['label']})\n{hit['text']}"
         for number, hit in enumerate(hits, start=1)
     )
+    # HumanMessage contains: numbered sources (search results) and the question.
+    # The LLM reads both and generates an answer with citations like [1], [2], etc.
     response = llm.invoke([
         SystemMessage(SYSTEM_PROMPT),
         HumanMessage(f"Sources:\n{sources}\n\nQuestion: {question}"),
@@ -211,23 +215,24 @@ def main():
         chunk_overlap=config.chunking.overlap,  # 150
     )
 
-    embeddings = make_embeddings()
-    collection = make_collection()
-    textract = make_textract()
+    embeddings = make_embeddings()  # BedrockEmbeddings instance: AWS Bedrock Titan v2
+    collection = make_collection()  # ChromaDB collection object: connected to overstone-assets
+    textract = make_textract()      # boto3 Textract client: AWS OCR service for scanned PDFs
 
     # Step 1: keep only PDFs, then fetch each one's bytes from MinIO.
     pdf_ids = [file_id for file_id in FILE_IDS if file_id.endswith(".pdf")]
 
     for file_id in pdf_ids:
-        obj = storage.get_object(file_id)
+        obj = storage.get_object(file_id)  # Fetch a single PDF file from MinIO (S3)
         print(f"{file_id}  {len(obj.body):>8} bytes  {obj.content_type}")
 
-        # Who owns the file and which asset it belongs to come from the database.
+        # Get the file record from the MySQL file table.
+        # record has: file_id, name, category, asset_id, account_id, asset_name, updated_at
         record = db.lookup_file(file_id)
 
-        pages = parse_pdf(obj.body, file_id, textract)
+        pages: list[Document] = parse_pdf(obj.body, file_id, textract)
         for doc in pages:
-            # Ownership and name come from the database, not the file, so they're attached here.
+            # Attach the file's owner info (account_id and asset_id) from the database record to each page.
             # Only IDs go on the chunks; names and categories stay in MySQL.
             doc.metadata["accountId"] = record.account_id
             doc.metadata["assetId"] = record.asset_id
@@ -237,27 +242,29 @@ def main():
         # Step 3: split the pages into chunks. Each chunk copies the metadata
         # of the page it came from (fileId, page, accountId, assetId).
         chunks = splitter.split_documents(pages)
-        for chunk in chunks:
-            preview = " ".join(chunk.page_content.split())[:60]
-            print(f"    chunk {chunk.metadata}  {len(chunk.page_content):>5} chars  {preview!r}")
 
-        # A file can still end up with no text (e.g. a blank page, or OCR found
-        # nothing). Nothing to embed or store (Chroma rejects an empty upsert).
+        # PDF pages can still end up with no chunks (e.g. a blank page, or OCR found nothing).
         if not chunks:
             print("    no text found, skipped")
             continue
+
+        # Print each chunk for debugging.
+        for chunk in chunks:
+            preview = " ".join(chunk.page_content.split())[:60]
+            print(f"    chunk {chunk.metadata}  {len(chunk.page_content):>5} chars  {preview!r}")
 
         # Step 4: one vector per chunk, in the same order as the chunks.
         vectors = embeddings.embed_documents([chunk.page_content for chunk in chunks])
         for vector in vectors:
             print(f"    vector: {len(vector)} numbers, starts {[round(x, 3) for x in vector[:4]]}")
 
-        # Step 5: store text + vector + metadata. First remove this file's old
-        # chunks: upsert merges metadata instead of replacing it, and a file
-        # that got shorter would otherwise keep its old extra chunks.
+        # Step 5: store text + vector + metadata. 
+        # Delete this file's old chunks first (ChromaDB upsert merges metadata, doesn't replace it).
         collection.delete(where={"fileId": file_id})
+        # After upsert, each chunk in ChromaDB looks like:
+        # {"id": "fileId:0", "document": "text...", "embedding": [0.005, 0.014, ...], "metadata": {"accountId": 46, "assetId": 7442, "fileId": "...", "page": 1}}
         collection.upsert(
-            ids=[f"{file_id}:{index}" for index in range(len(chunks))],
+            ids=[f"{file_id}:{index}" for index in range(len(chunks))],  # e.g. "062d2aed-...pdf:0", "062d2aed-...pdf:1"
             documents=[chunk.page_content for chunk in chunks],
             embeddings=vectors,
             metadatas=[chunk.metadata for chunk in chunks],
@@ -265,18 +272,23 @@ def main():
 
     print(f"\nChroma collection '{collection.name}' now holds {collection.count()} chunks")
 
-    llm = make_llm()
+    llm = make_llm()  # ChatBedrockConverse instance: AWS Bedrock Nova 2 Lite LLM
 
     # Steps 6 + 7 for each test question: search, then answer with citations.
     for question in QUESTIONS:
+        # Step 6: Search ChromaDB for chunks similar to the question using vector similarity.
+        # results is a list[dict] with fields: text, metadata, score, fileName, label
         results = search(db, collection, embeddings, question, ACCOUNT_ID)
         print(f"\nQ: {question}")
         for hit in results:
             preview = " ".join(hit["text"].split())[:70]
             print(f"  {hit['score']:.3f}  {hit['label']:<24}  {preview!r}")
 
-        print(f"A: {answer(llm, question, results)}")
-        # Legend so a reader can see which file and page each [n] refers to.
+        # Step 7: Ask the LLM to generate an answer from the search results with citations.
+        # answer_text example: "The invoice was issued by Esthella Provas [1] on September 19 [1]."
+        answer_text = answer(llm, question, results)
+        print(f"A: {answer_text}")
+        # Print a legend: show which file and page each citation number [1], [2], etc. refers to.
         for number, hit in enumerate(results, start=1):
             print(f"   [{number}] {hit['label']}")
 
