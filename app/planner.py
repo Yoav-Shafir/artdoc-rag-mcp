@@ -20,7 +20,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from app.happy_path import make_llm
+from app.rag import make_llm
 
 logger = logging.getLogger(__name__)
 

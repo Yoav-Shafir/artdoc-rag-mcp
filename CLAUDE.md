@@ -4,11 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Web Platform RAG is a Retrieval-Augmented Generation pipeline built on local S3-compatible storage (MinIO) and a vector database (ChromaDB). The ingestion flow is: download a JSON asset from S3 → parse it → chunk the text → embed the chunks → store the embeddings in ChromaDB, with search running the same embedding step against stored vectors.
+Web Platform RAG answers questions about the documents (PDFs) attached to assets on the Overstone platform.
+
+- **Ingestion:** MySQL lists an account's PDF files → each PDF is fetched from S3 → parsed with pypdf (scanned pages are OCR'd with AWS Textract) → chunked → embedded with AWS Bedrock Titan v2 → stored in ChromaDB.
+- **Query:** an LLM planner splits the user's query into SQL filters, a document query and a `kind`; SQL narrows the candidate assets only when there are filters; vector search runs within that scope; the result is either a written answer with citations (`answer`) or a ranked list of assets (`list`).
+
+Planned deployment: ingestion as a daily AWS Batch job, queries as a Lambda invoked by the platform server (see [docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md)).
 
 ## Active implementation plan
 
-Work is following [docs/RAG_IMPLEMENTATION_PLAN.md](docs/RAG_IMPLEMENTATION_PLAN.md). At the start of any implementation session, read its "How to use this plan" section, continue from the first unchecked step in the Progress tracker, and when a step is done tick it and append to the Session log. Keep the plan updated if the approach changes. Some notes below (mock embeddings, no tests) describe the pre-plan state and will change as phases complete.
+Work follows [docs/RAG_IMPLEMENTATION_PLAN.md](docs/RAG_IMPLEMENTATION_PLAN.md). At the start of any implementation session, read its "How to use this plan" section, continue from the first unchecked step in the Progress tracker, and when a step is done tick it and append to the Session log. Keep the plan updated if the approach changes. The hybrid query design is in [docs/HYBRID_QUERY_STRATEGY.md](docs/HYBRID_QUERY_STRATEGY.md).
 
 ## Commands
 
@@ -30,52 +35,58 @@ docker compose down -v         # stop and wipe volumes (minio-data, chroma_data)
 ### Task shortcuts (poethepoet, the `npm run` equivalent)
 ```bash
 uv run poe                   # list all tasks (defined under [tool.poe.tasks] in pyproject.toml)
-uv run poe verify            # service health checks
+uv run poe batch             # ingestion job (app/batch_ingestion.py): new PDFs in, deleted files out
+uv run poe ask "<query>"     # any query: plan -> (SQL) -> vector search -> answer or ranked list (app/query.py)
+uv run poe lambda events/ask_answer.json   # invoke the query Lambda handler locally (uses .env)
+uv run poe planner           # print the query plan for the sample prompts
+uv run poe eval              # score search + answers against evals/questions.json
+uv run poe copy-pdfs 46 --source-bucket <b> --destination-bucket <b>   # copy an account's PDFs between S3 buckets
 uv run poe chroma            # print every record in the Chroma collection
+uv run poe verify            # service health checks
 uv run poe test              # unit tests; `uv run poe test -m integration` for integration tests
-uv run poe demo              # end-to-end demo (app_example.py)
+uv run poe pipeline          # happy_path.py demo (stale: hard-coded file list, reads flat bucket-root keys)
+uv run poe hybrid            # hybrid_search.py demo (account 7; superseded by `ask`)
 ```
 When adding a new runnable script or CLI, also add a task for it.
 
-### Running the app
-```bash
-python app_example.py                    # end-to-end ingestion + search demo, entry point for the app/ package
-python scripts/verify_services.py         # checks Docker status, MinIO/ChromaDB health, lists S3 buckets & Chroma collections, dumps chroma.sqlite3 table counts
-```
-
-Tests use pytest (`tests/unit`, `tests/integration`); no linter or build step is configured.
+Tests use pytest (`tests/unit`, `tests/integration`; integration tests need Docker services and are skipped/deselected otherwise). No linter is configured in the project; `uvx ruff check` is used ad hoc.
 
 ### Inspecting state directly
 ```bash
 curl -s http://localhost:9000/minio/health/live     # MinIO health
 curl -s http://localhost:8000/api/v1/heartbeat       # ChromaDB health
-docker cp overstone-chromadb:/data/chroma.sqlite3 ./chroma.sqlite3   # pull Chroma's sqlite file to inspect tables directly
+docker exec -it mysql mysql -uroot -p overstone_v2   # the platform's dev MySQL (read-only for this project)
 ```
-MinIO console at http://localhost:9001 (minioadmin/minioadmin) shows bucket contents visually; ChromaDB has no UI, only the HTTP API / sqlite file.
+MinIO console at http://localhost:9001 (minioadmin/minioadmin). ChromaDB has no UI, only the HTTP API (`uv run poe chroma`).
 
 ## Architecture
 
-The `app/` package is organized as one directory per pipeline stage, each exposing a single class re-exported from its `__init__.py`:
+- `app/config.py` — pydantic-settings groups, each reading its own env prefix from `.env`: `S3Settings` (`S3_`), `ChromaSettings` (`CHROMA_`), `EmbeddingsSettings` (`EMBEDDINGS_`), `ChunkingSettings` (`CHUNK_`), `BedrockSettings` (`BEDROCK_`, plus `AWS_PROFILE`), `DatabaseSettings` (`RDS_`), `RetrievalSettings` (`RETRIEVAL_`). A module-level `config = AppSettings.from_env()` singleton is imported everywhere instead of reading `os.environ`.
+- `app/db/database.py` — `Database`, a read-only MySQL session; all SQL lives here and is parameterized. `list_account_ids(account_id=None)` (optional single-account filter for pilots), `files_for_account()` (PDFs of non-deleted assets, excluding `IMAGES`/`CR_IMAGE`), `lookup_file()` / `resolve_owner()`, `candidate_asset_ids(account_id, filters)` (planner filters → SQL), `asset_names()`, `category_ids()`.
+- `app/storage/s3_storage.py` — `S3Storage`, a boto3 client only: **every method takes the bucket as its first argument** (`get_object(bucket, key)` → `StoredObject`, raising `StorageError`). `S3_ENDPOINT_URL` set → MinIO with its keys; empty → real AWS S3 via `AWS_PROFILE` (or the IAM role in AWS).
+- `app/rag.py` — query-side building blocks: `make_embeddings()` / `make_collection()` (cosine) / `make_llm()`, `search()` (top-k chunks of one account), `answer()` (LLM answer with `[n]` citations). Deliberately free of ingestion libraries so the query Lambda bundle stays small.
+- `app/happy_path.py` — ingestion building blocks: `parse_pdf()` (pypdf, falling back to `ocr_page()` = pypdfium2 render + Textract `AnalyzeDocument` with LAYOUT for scanned pages), `make_textract()`. Its own `main()` is the original step-by-step demo.
+- `app/batch_ingestion.py` — the ingestion job. Per account: load PDF records, skip files whose stored chunks already match (`assetId`, `category`) — file content never changes — ingest the rest, delete chunks of files no longer in the database. S3 key is `<accountId>/<fileId>`; missing files are logged as one-line warnings and skipped. `PILOT_ACCOUNT_ID` (46) and `MAX_FILES_PER_ACCOUNT` (50) limit test runs; set both to `None` for everything.
+- `app/planner.py` — `plan(query, llm)` uses `llm.with_structured_output(QueryPlan)`: `kind` (`answer`/`list`), `filters` (`AssetFilters`: asset type, artist, years, medium, period, condition; enums mirror MySQL, kept in sync by `tests/integration/test_planner_values.py`), `document_query`. `closest_value()` maps near-miss values (e.g. "POST-WAR") onto valid enum values.
+- `app/query.py` — `ask(query, account_id, ...)`, the single query entry point (what the Lambda will call). Returns a dict: `kind`, `filters`, `document_query`, plus `answer` + `hits`, or `assets` (each with `assetId`, `assetName`, `score`, evidence).
+- `app/hybrid_search.py` — `rank_assets()` (one entry per asset, scored by its best chunk; used by `query.py`) and `search_candidates()`; its `main()` is an older demo.
+- `app/eval.py` + `evals/questions.json` — retrieval (hit@1/hit@3) and answer (must-contain phrases) scoring.
+- `lambda/main.py` — the query Lambda: `handler(event)` with `{"query", "accountId"}` → `ask()`. Loads `RDS_*` from Secrets Manager (`AWS_SECRET_NAME`) before `app.config` is imported; clients are created once per container. Only `lambda/requirements.txt` is bundled (`chromadb-client`, not the full `chromadb`).
+- `cdk_app.py`, `cdk.json`, `cdk_rag/rag_stack.py`, `config/{dev,prod}.json` — CDK for the query Lambda, following the `cdk-pdf-reports` repo (Dev/Prod stacks, account `555547688340`, `eu-west-1`, existing VPC/subnets/security group, env vars from `config/*.json`). The bundle is `app/` + `lambda/main.py` + `lambda/requirements.txt`, built in Docker by an explicit bundling command (not `PythonFunction`, because `app/` lives outside `lambda/`). Deploy with `cdk deploy <stack>`; CDK libraries are in the `cdk` dependency group. Sample events in `events/`.
+- `scripts/` — `copy_account_pdfs.py` (server-side S3 copy into `<accountId>/<fileId>`), `show_chroma.py`, `verify_services.py`.
 
-- `app/config.py` — dataclass-based settings (`S3Config`, `ChromaConfig`, `EmbeddingsConfig`, `ChunkingConfig`) all read from env vars at import time via a module-level `config = AppConfig.from_env()` singleton. Other modules import this shared `config` object rather than reading `os.environ` themselves.
-- `app/db/database.py` — `Database` reads the platform's MySQL `file` table (read-only session). Processing is database-driven: `list_account_ids()` → `files_for_account(id)` (all records in one query, with category, asset and account) → fetch each file from S3 by `fileId`.
-- `app/storage/s3_storage.py` — `S3Storage` wraps boto3 for the MinIO bucket: raw bytes (`put_object`/`get_object` → `StoredObject`, raising `StorageError`), JSON helpers (`upload_document`/`download_document`), paginated `list_documents`. Objects are stored flat at the bucket root, key = `fileId`.
-- `app/documents/` — `DocumentParser` is an ABC (`parse`, `validate`) returning a `ParsedDocument` (`id`, `title`, `content`, `metadata`). `JsonAssetParser` is the concrete implementation for the asset JSON schema; it accepts `id`/`assetId`/`asset_id` interchangeably as the identifier field (`ID_FIELDS`) and folds known fields (`description`, `category`, `artist`, `year`) into `content`, everything else into `metadata`.
-- `app/chunking/text_chunker.py` — `TextChunker` does fixed-size overlapping chunking (`chunk`) or sentence-aware chunking (`chunk_by_sentences`); overlap must be smaller than chunk size or the constructor raises.
-- `app/embeddings/bedrock_embeddings.py` — `BedrockEmbeddings` is named for its intended production backend (AWS Bedrock) but **currently generates a deterministic mock embedding from an MD5 hash of the text**, not a real model call. Swap `_generate_embedding` for a real embedding call before relying on semantic search quality.
-- `app/vector_store/chroma_store.py` — `ChromaStore` wraps a `chromadb.HttpClient` bound to one collection (`get_or_create_collection`), with add/search/get/delete/count/clear operations.
-- `app/ingestion/ingestion_service.py` — `IngestionService` composes all of the above (each dependency is injectable via constructor, defaulting to a fresh instance of the corresponding class). `ingest_document(s3_key)` runs the full download→parse→chunk→embed→store pipeline and bails out early (returning `False`, logging the reason) at whichever step fails. `search(query_text)` embeds the query and delegates to `ChromaStore.search`.
+### Chunks in ChromaDB
 
-`app_example.py` at the repo root is the reference/demo entry point wiring `IngestionService` end-to-end against the sample asset stored in MinIO.
+Collection `overstone-assets` (cosine distance, 1024-dim Titan v2 vectors). Chunk id `<fileId>:<index>`; metadata exactly `accountId`, `assetId`, `fileId`, `page`, `category`. Names (file and asset) are not stored on chunks; they are looked up in MySQL at response time. Every search filters by `accountId` (tenant isolation).
 
 ### Configuration
 
-All runtime config comes from `.env` (loaded via `python-dotenv` in app code, and via manual parsing in `scripts/verify_services.py` since that script must run before the venv's dotenv import). Key variables: `S3_ENDPOINT_URL`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`, `S3_BUCKET`, `CHROMA_HOST`, `CHROMA_PORT`, `CHROMA_COLLECTION`. `EMBEDDINGS_MODEL`/`EMBEDDINGS_DIMENSION`/`CHUNK_SIZE`/`CHUNK_OVERLAP` are read by `app/config.py` but not currently present in `.env` (they fall back to defaults: `all-MiniLM-L6-v2`, 384, 512, 50).
+All runtime config comes from `.env` (read by pydantic-settings, which needs `python-dotenv`; `scripts/verify_services.py` parses it manually). `.env.example` lists every variable. Notable: `S3_BUCKET` (the bucket ingestion reads from), `S3_ENDPOINT_URL` (set = MinIO, empty = AWS), `AWS_PROFILE`, `BEDROCK_*` (embeddings region, LLM model/region), `RDS_*`, `CHROMA_*`, `CHUNK_SIZE`/`CHUNK_OVERLAP` (1000/150).
 
 ### Infrastructure details
 
-- **Document catalog = the platform's dev MySQL** (`overstone_v2`, Docker container `mysql`, port 3306, `RDS_*` in `.env`, `config.db`). **Read-only: never write to it unless the user explicitly asks** (any such change is logged, with revert SQL, in the plan's Session log). S3/MinIO object keys are `file.fileId` (`<uuid>.<ext>`), flat at the bucket root with no folders, matching production; the owning account is resolved via `file.entityId` → `asset.accountId`. Files with no resolvable owner are never ingested. Inspect with `docker exec -it mysql mysql -uroot -p overstone_v2`.
-
-- MinIO runs the `quay.io/minio/aistor/minio` image, which requires a license file mounted at `/minio.license` (`minio.license` in repo root, gitignored, referenced by `compose.yaml`). Without it the container won't start.
-- ChromaDB data persists in a named Docker volume (`overstone-chroma-data`), not a bind mount — use `docker cp overstone-chromadb:/data/chroma.sqlite3 .` to inspect it from the host.
-- MinIO data persists in the bind-mounted `minio-data/` directory (gitignored).
+- **Document catalog = the platform's dev MySQL** (`overstone_v2`, Docker container `mysql`, port 3306, `RDS_*` in `.env`, `config.db`). **Read-only: never write to it unless the user explicitly asks** (any such change is logged, with revert SQL, in the plan's Session log). The owning account is resolved via `file.entityId` → `asset.accountId`; files with no resolvable owner are never ingested.
+- **S3 layout:** in the dev bucket used by ingestion (`overstone-wp-files-v2-dev`), objects are `<accountId>/<fileId>` (e.g. `46/<uuid>.pdf`), populated from production by `copy-pdfs`. `fileId` extensions may be upper case (`.PDF`).
+- MinIO runs the `quay.io/minio/aistor/minio` image, which requires a license file mounted at `/minio.license` (`minio.license` in repo root, gitignored, referenced by `compose.yaml`). Without it the container won't start. MinIO data persists in the bind-mounted `minio-data/` directory (gitignored).
+- ChromaDB data persists in a named Docker volume (`overstone-chroma-data`), not a bind mount.
+- AWS services used: Bedrock (Titan v2 embeddings in `eu-west-2`, LLM in `BEDROCK_LLM_REGION`), Textract (`eu-west-2`), S3.

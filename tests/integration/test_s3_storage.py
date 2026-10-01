@@ -15,23 +15,27 @@ TEST_BUCKET = "overstone-rag-test"
 
 @pytest.fixture(scope="module")
 def storage():
-    s = S3Storage(S3Settings(bucket=TEST_BUCKET))
-    s.ensure_bucket()
+    settings = S3Settings(bucket=TEST_BUCKET)
+    # These tests create and delete a bucket: only against MinIO, never real AWS S3.
+    if not settings.endpoint_url:
+        pytest.skip("S3_ENDPOINT_URL is empty (real AWS S3); these tests run against MinIO only")
+    s = S3Storage(settings)
+    s.ensure_bucket(TEST_BUCKET)
     yield s
-    for key in s.list_documents():
-        s.delete_document(key)
+    for key in s.list_documents(TEST_BUCKET):
+        s.delete_document(TEST_BUCKET, key)
     s.client.delete_bucket(Bucket=TEST_BUCKET)
 
 
 def test_ensure_bucket_is_idempotent(storage):
-    storage.ensure_bucket()  # already exists: must not raise
+    storage.ensure_bucket(TEST_BUCKET)  # already exists: must not raise
 
 
 def test_bytes_round_trip(storage):
     data = bytes(range(256)) * 10
-    storage.put_object("roundtrip.bin", data, "application/octet-stream")
+    storage.put_object(TEST_BUCKET, "roundtrip.bin", data, "application/octet-stream")
 
-    obj = storage.get_object("roundtrip.bin")
+    obj = storage.get_object(TEST_BUCKET, "roundtrip.bin")
 
     assert obj.body == data
     assert obj.key == "roundtrip.bin"
@@ -40,35 +44,35 @@ def test_bytes_round_trip(storage):
 
 
 def test_json_round_trip(storage, sample_asset):
-    assert storage.upload_document("accounts/account-123/asset-456.json", sample_asset)
+    assert storage.upload_document(TEST_BUCKET, "accounts/account-123/asset-456.json", sample_asset)
 
-    assert storage.download_document("accounts/account-123/asset-456.json") == sample_asset
-    assert storage.get_object("accounts/account-123/asset-456.json").content_type == "application/json"
+    assert storage.download_document(TEST_BUCKET, "accounts/account-123/asset-456.json") == sample_asset
+    assert storage.get_object(TEST_BUCKET, "accounts/account-123/asset-456.json").content_type == "application/json"
 
 
 def test_upload_file_guesses_content_type(storage, tmp_path):
     path = tmp_path / "notes.txt"
     path.write_text("hello")
 
-    storage.upload_file(path, "accounts/account-123/notes.txt")
+    storage.upload_file(TEST_BUCKET, path, "accounts/account-123/notes.txt")
 
-    assert storage.get_object("accounts/account-123/notes.txt").content_type == "text/plain"
+    assert storage.get_object(TEST_BUCKET, "accounts/account-123/notes.txt").content_type == "text/plain"
 
 
 def test_missing_object_raises_storage_error(storage):
     with pytest.raises(StorageError):
-        storage.get_object("does/not/exist.json")
+        storage.get_object(TEST_BUCKET, "does/not/exist.json")
 
 
 def test_download_document_returns_none_when_missing(storage):
-    assert storage.download_document("does/not/exist.json") is None
+    assert storage.download_document(TEST_BUCKET, "does/not/exist.json") is None
 
 
 def test_list_filters_by_prefix(storage):
-    storage.put_object("accounts/account-789/a.json", b"{}")
-    storage.put_object("accounts/account-789/b.json", b"{}")
+    storage.put_object(TEST_BUCKET, "accounts/account-789/a.json", b"{}")
+    storage.put_object(TEST_BUCKET, "accounts/account-789/b.json", b"{}")
 
-    keys = storage.list_documents("accounts/account-789/")
+    keys = storage.list_documents(TEST_BUCKET, "accounts/account-789/")
 
     assert sorted(keys) == ["accounts/account-789/a.json", "accounts/account-789/b.json"]
 
@@ -76,6 +80,6 @@ def test_list_filters_by_prefix(storage):
 def test_list_paginates_past_1000_keys(storage):
     # list_objects_v2 returns at most 1000 keys per call.
     for i in range(1005):
-        storage.put_object(f"many/{i:04d}.txt", b"x")
+        storage.put_object(TEST_BUCKET, f"many/{i:04d}.txt", b"x")
 
-    assert len(storage.list_documents("many/")) == 1005
+    assert len(storage.list_documents(TEST_BUCKET, "many/")) == 1005

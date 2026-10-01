@@ -88,6 +88,15 @@ Documents in collection: 0
 All local services are working.
 ```
 
+### Ask a Query
+
+Plans the query, then returns either a written answer or a ranked list of assets (account 46):
+
+```bash
+uv run poe ask "Who issued the invoice and on what date?"
+uv run poe ask "Show me all assets whose provenance includes Christie's"
+```
+
 ## Service Endpoints & Ports
 
 | Service | Endpoint | Port | Purpose |

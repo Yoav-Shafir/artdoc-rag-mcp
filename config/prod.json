@@ -1,0 +1,15 @@
+{
+  "PYTHON_ENV": "prod",
+  "AWS_SECRET_NAME": "web-platform-server-v2",
+  "RDS_PORT": "3306",
+  "RDS_DB_NAME": "overstone_v2",
+  "CHROMA_HOST": "TODO-chroma-private-ip",
+  "CHROMA_PORT": "8000",
+  "CHROMA_COLLECTION": "overstone-assets",
+  "EMBEDDINGS_MODEL": "amazon.titan-embed-text-v2:0",
+  "EMBEDDINGS_DIMENSION": "1024",
+  "BEDROCK_REGION": "eu-west-2",
+  "BEDROCK_LLM_MODEL_ID": "eu.amazon.nova-2-lite-v1:0",
+  "BEDROCK_LLM_REGION": "eu-west-1",
+  "BEDROCK_LLM_MAX_TOKENS": "1024"
+}

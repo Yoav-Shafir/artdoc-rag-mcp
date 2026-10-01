@@ -5,9 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.43.102",
     "chromadb>=1.5.9",
-    "langchain>=1.4.2",
     "langchain-aws>=1.7.9",
-    "langchain-community>=0.4.2",
     "langchain-core>=1.6.5",
     "langchain-text-splitters>=1.1.2",
     "pillow>=12.3.0",
@@ -19,6 +17,10 @@ dependencies = [
 ]
 
 [dependency-groups]
+cdk = [
+    "aws-cdk-lib==2.181.1",
+    "constructs>=10.8.1",
+]
 dev = [
     "poethepoet>=0.48.0",
     "pytest>=9.1.1",
@@ -38,11 +40,13 @@ addopts = "-m 'not integration'"
 # Task shortcuts (like `npm run`): `uv run poe <task>`, or `uv run poe` to list them.
 [tool.poe.tasks]
 chroma = { cmd = "python scripts/show_chroma.py", help = "Print every record in the ChromaDB collection" }
+copy-pdfs = { cmd = "python scripts/copy_account_pdfs.py", help = "Copy an account's PDFs between S3 buckets (args: <accountId> --source-bucket <name> --destination-bucket <name>)" }
 verify = { cmd = "python scripts/verify_services.py", help = "Check Docker, MinIO and ChromaDB health" }
 test = { cmd = "pytest", help = "Run unit tests (add -m integration for integration tests)" }
 pipeline = { cmd = "python -m app.happy_path", help = "Run the happy-path RAG pipeline (built step by step)" }
 planner = { cmd = "python -m app.planner", help = "Print the query plan for sample prompts" }
+lambda = { cmd = "python lambda/main.py", env = { PYTHONPATH = "." }, help = "Invoke the query Lambda handler locally with an event file (arg: events/ask_answer.json)" }
+ask = { cmd = "python -m app.query", help = "Ask any query: plan -> (SQL) -> search -> list or answer (arg: the query)" }
 hybrid = { cmd = "python -m app.hybrid_search", help = "Plan -> SQL candidates -> search their documents -> ranked assets" }
 batch = { cmd = "python -m app.batch_ingestion", help = "Daily ingestion job (AWS Batch): new PDFs, remove deleted files" }
 eval = { cmd = "python -m app.eval", help = "Score search + answers against evals/questions.json (run pipeline first)" }
-demo = { cmd = "python app_example.py", help = "Run the end-to-end ingestion + search demo" }

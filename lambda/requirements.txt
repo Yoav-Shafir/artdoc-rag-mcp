@@ -1,0 +1,8 @@
+# Query Lambda dependencies only (ingestion libraries like pypdf/Textract are not needed).
+# boto3 is also in the Lambda runtime; pinned here so the bundle matches local testing.
+chromadb-client==1.5.9
+langchain-aws==1.7.9
+langchain-core==1.6.5
+pydantic-settings==2.15.0
+python-dotenv
+pymysql==1.2.3

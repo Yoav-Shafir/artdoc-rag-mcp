@@ -13,31 +13,40 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import config
 from app.db import Database, FileRecord
-from app.happy_path import make_collection, make_embeddings, make_textract, parse_pdf
-from app.storage import S3Storage
+from app.happy_path import make_textract, parse_pdf
+from app.rag import make_collection, make_embeddings
+from app.storage import S3Storage, StorageError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # Pilot: only this account is ingested. Set to None to ingest every account.
 PILOT_ACCOUNT_ID = 46
+# Test runs: process at most this many files per account. Set to None for no limit.
+MAX_FILES_PER_ACCOUNT = 50
 
 
-def stored_assets(collection, account_id: int) -> dict[str, int]:
-    """fileId -> assetId of the files that already have chunks for this account."""
+def stored_metadata(collection, account_id: int) -> dict[str, tuple]:
+    """fileId -> (assetId, category) of the files that already have chunks for this account."""
     stored = collection.get(where={"accountId": account_id}, include=["metadatas"])
-    return {meta["fileId"]: meta["assetId"] for meta in stored["metadatas"]}
+    return {
+        meta["fileId"]: (meta["assetId"], meta.get("category"))  # older chunks have no category
+        for meta in stored["metadatas"]
+    }
 
 
-def ingest_file(record: FileRecord, storage, splitter, embeddings, collection, textract) -> int:
+def ingest_file(record: FileRecord, bucket: str, storage, splitter, embeddings, collection, textract) -> int:
     """Fetch, parse, chunk, embed and store one PDF. Returns the number of chunks stored."""
-    obj = storage.get_object(record.file_id)  # Fetch a single PDF file from MinIO (S3)
+    # Objects are stored under the account's folder: <accountId>/<fileId>, e.g. 46/062d2aed-...pdf
+    obj = storage.get_object(bucket, f"{record.account_id}/{record.file_id}")
     pages = parse_pdf(obj.body, record.file_id, textract)
 
-    # Only IDs go on the chunks; names and categories stay in MySQL.
+    # IDs and the category go on the chunks (category allows filtering by document type);
+    # names stay in MySQL.
     for page in pages:
         page.metadata["accountId"] = record.account_id
         page.metadata["assetId"] = record.asset_id
+        page.metadata["category"] = record.category  # e.g. VALUATION_REPORTS, PROVENANCE
 
     chunks = splitter.split_documents(pages)
     # Delete this file's old chunks first (ChromaDB upsert merges metadata, doesn't replace it).
@@ -54,24 +63,29 @@ def ingest_file(record: FileRecord, storage, splitter, embeddings, collection, t
     )
     return len(chunks)
 
-
-def ingest_account(account_id: int, db, storage, splitter, embeddings, collection, textract) -> dict:
+def ingest_account(account_id: int, bucket: str, db, storage, splitter, embeddings, collection, textract) -> dict:
     """Ingest an account's new PDFs, then remove chunks of deleted files."""
     counts = {"ingested": 0, "unchanged": 0, "failed": 0, "deleted": 0}
     files = db.files_for_account(account_id)  # PDFs only, image categories excluded
-    stored = stored_assets(collection, account_id)
+    stored = stored_metadata(collection, account_id)
 
-    for record in files:
-        # File content never changes, so a file with chunks is done.
-        if stored.get(record.file_id) == record.asset_id:
+    # The limit applies to processing only; the deletion check below still uses every file.
+    for record in files[:MAX_FILES_PER_ACCOUNT]:
+        # File content never changes, so a file with chunks is done, unless its asset or
+        # category changed in the database (then its chunks' metadata is out of date).
+        if stored.get(record.file_id) == (record.asset_id, record.category):
             counts["unchanged"] += 1
             continue
         try:
-            chunk_count = ingest_file(record, storage, splitter, embeddings, collection, textract)
+            chunk_count = ingest_file(record, bucket, storage, splitter, embeddings, collection, textract)
             logger.info(f"Ingested {record.file_id} ({record.name!r}): {chunk_count} chunks")
             counts["ingested"] += 1
+        except StorageError as e:
+            # Missing in S3 (or unreadable): expected for some files, so one line, no traceback.
+            logger.warning(f"Skipped {record.file_id} ({record.name!r}): {e}")
+            counts["failed"] += 1
         except Exception:
-            # Missing in S3, unreadable PDF, AWS error...: log it and continue with the next file.
+            # Unexpected (bad PDF, Textract/Bedrock error...): full traceback, then continue.
             logger.exception(f"Failed to ingest {record.file_id} ({record.name!r})")
             counts["failed"] += 1
 
@@ -89,6 +103,7 @@ def main():
     """Run the ingestion for every account (or only the pilot account)."""
     db = Database()  # read-only access to the platform's MySQL
     storage = S3Storage()
+    bucket = config.s3.bucket  # S3_BUCKET from .env: where the PDFs are read from
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=config.chunking.size,  # 1000
         chunk_overlap=config.chunking.overlap,  # 150
@@ -101,7 +116,7 @@ def main():
     logger.info(f"Ingesting {len(account_ids)} account(s): {account_ids}")
 
     for account_id in account_ids:
-        counts = ingest_account(account_id, db, storage, splitter, embeddings, collection, textract)
+        counts = ingest_account(account_id, bucket, db, storage, splitter, embeddings, collection, textract)
         logger.info(f"Account {account_id}: {counts}")
 
 

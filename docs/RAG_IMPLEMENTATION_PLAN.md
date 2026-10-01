@@ -3,7 +3,7 @@
 End-to-end plan for turning the current prototype into a working RAG system:
 **save file to MinIO → read it back → parse → chunk → embed (Bedrock Titan v2) → store (ChromaDB) → retrieve (tenant-filtered) → generate an answer (Claude on Bedrock)**.
 
-The target module layout is described in [RAG_MODULE_ROLES.md](../RAG_MODULE_ROLES.md). This plan is the ordered route to get there.
+The current module layout is described in [CLAUDE.md](../CLAUDE.md) (Architecture section). This plan is the ordered route to get there.
 
 ---
 
@@ -711,7 +711,7 @@ With the database-driven flow, reconciliation is built into `ingest_account` (th
 2. Update `scripts/verify_services.py`: use `app.config` instead of hand-parsing `.env`, and add a Bedrock check (embed "ping").
 3. Rewrite the README "Running" section (K14): upload by fileId → ingest → sync → search → ask, plus how to run the tests.
 4. Update CLAUDE.md: the new modules, commands (`uv run pytest`, the CLIs), and the fact that the embeddings are now real. Remove the "no test suite" and "mock embedding" notes.
-5. Update RAG_MODULE_ROLES.md wherever the implementation differs.
+5. Update CLAUDE.md (Architecture section) wherever the implementation differs.
 
 **Done when:** following the README from a clean `docker compose down -v` gives a working `ask`.
 
@@ -773,3 +773,4 @@ Decide per category, add an `ImageParser` / OCR step to the registry, and watch 
 | 2026-09-26 | (vision test) | One-off test, no code change: Nova 2 Lite (vision, via boto3 `converse` with an image block) transcribed the handwritten Widmaier Picasso certificate (page 1, 320 in / 144 out tokens). Much better than Textract ("Cubisme", "l'automne 1912", "Widmaier Picasso", "œuvre de mon père, Pablo Picasso") but still wrong on some words ("Draya" for Maya, "Louisippe'" for Soussignée) and it **ignored the `[?]` instruction** (guessed instead). The user decided: no vision LLM for now. Worth testing a stronger vision model (Nova Pro / Claude) when this is revisited. |
 | 2026-09-26 | Hybrid step 5 (search + rank) | `app/hybrid_search.py` (`uv run poe hybrid`): `search_candidates()` (Chroma `where` accountId + `assetId $in` candidates, n = count of their chunks via `collection.get(include=[])`), `rank_assets()` (best chunk per asset, then no-doc candidates), `main()` chains plan → `candidate_asset_ids` → search → rank for account 7. Result for "Show me Picasso works whose provenance includes Sotheby's": filters `artist=Pablo Picasso`, document_query `Sotheby's`, 5 candidates; **#1 asset 2566 'Guitare sur une table' (score 0.503), evidence = the OCR'd Sotheby's invoice**; 4 assets with no documents listed after. The first end-to-end hybrid query works. Next ideas: batch the display-name lookups, a second asset with documents to test ranking, show the applied filters to the user, planner evals. |
 | 2026-09-26 | (idea, later) | **Sales-table tool** for the platform's `sales` table (about 5 years of auction sales): SQL tools the LLM can call, combined with RAG in the answer flow. Full write-up (tool sketch, question types, the common pattern, open decisions) in the section *Idea: sales-table tool (later)* above. |
+| 2026-10-01 | Query Lambda + CDK (built, not deployed) | `app/rag.py` split out of `happy_path.py` (embeddings, collection, LLM, search, answer) so the query path loads no ingestion libraries. `lambda/main.py` handler (`{query, accountId}` → `ask()`, RDS_* from Secrets Manager via `AWS_SECRET_NAME`, clients reused per container), `lambda/requirements.txt` (`chromadb-client`), `events/ask_*.json`, `poe lambda`. CDK following cdk-pdf-reports: `cdk_app.py`, `cdk.json`, `cdk_rag/rag_stack.py` (Dev/Prod, existing VPC/subnets/SG via `from_vpc_attributes`, new IAM role: VPC access + `bedrock:InvokeModel` + secret read), `config/{dev,prod}.json`. `aws-cdk-lib` pinned to 2.181.1 to match the installed CLI (2.1101). `cdk synth --all` OK; bundle 210 MB unzipped (limit 250 MB), smoke-tested in the Lambda Python image. **Open:** Chroma host in AWS (`CHROMA_HOST` placeholder), role vs imported role, Datadog logging, invoke permission for the server. |

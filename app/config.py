@@ -20,13 +20,17 @@ def _settings_config(prefix: str) -> SettingsConfigDict:
 
 
 class S3Settings(BaseSettings):
-    """S3/MinIO settings (S3_*)."""
+    """S3/MinIO settings (S3_*).
+
+    S3_ENDPOINT_URL set   -> MinIO (or another S3-compatible server), with the access keys below.
+    S3_ENDPOINT_URL empty -> real AWS S3, with AWS_PROFILE (dev) or the IAM role (AWS Batch).
+    """
 
     model_config = _settings_config("S3_")
 
-    endpoint_url: str = "http://localhost:9000"
-    access_key: str = "minioadmin"
-    secret_key: str = "minioadmin"
+    endpoint_url: str | None = None
+    access_key: str | None = None  # MinIO only
+    secret_key: str | None = None  # MinIO only
     region: str = "eu-west-2"
     bucket: str = "overstone-rag-documents"
 

@@ -24,3 +24,6 @@ chroma.sqlite3
 # Test coverage output
 .coverage
 htmlcov/
+
+# CDK build output
+cdk.out/

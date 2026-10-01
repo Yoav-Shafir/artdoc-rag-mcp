@@ -8,14 +8,8 @@ import json
 
 from app.config import config
 from app.db import Database
-from app.happy_path import (
-    ACCOUNT_ID,
-    answer,
-    make_collection,
-    make_embeddings,
-    make_llm,
-    search,
-)
+from app.happy_path import ACCOUNT_ID
+from app.rag import answer, make_collection, make_embeddings, make_llm, search
 
 QUESTIONS_FILE = config.project_root / "evals" / "questions.json"
 

@@ -11,8 +11,8 @@ Run: uv run poe hybrid
 """
 
 from app.db import Database
-from app.happy_path import make_collection, make_embeddings, make_llm
 from app.planner import plan
+from app.rag import make_collection, make_embeddings, make_llm
 
 # Mocked "logged-in account": account 7 owns Picasso assets with ingested files.
 ACCOUNT_ID = 7

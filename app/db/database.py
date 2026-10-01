@@ -216,6 +216,16 @@ class Database:
         sql = "SELECT a.id FROM asset a WHERE " + " AND ".join(conditions) + " ORDER BY a.id"
         return [row["id"] for row in self._query(sql, params)]
 
+    def asset_names(self, asset_ids: list[int]) -> dict[int, str]:
+        """{assetId: name} for the given assets, in one query."""
+        if not asset_ids:  # `IN ()` is invalid SQL
+            return {}
+        # pymysql turns the tuple into a parenthesised list: IN (7159, 6638, ...)
+        rows = self._query(
+            "SELECT id, name FROM asset WHERE id IN %(ids)s", {"ids": tuple(asset_ids)}
+        )
+        return {row["id"]: row["name"] for row in rows}
+
     def close(self) -> None:
         if self._connection is not None and self._connection.open:
             self._connection.close()

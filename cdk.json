@@ -1,0 +1,12 @@
+{
+  "app": "uv run --group cdk python cdk_app.py",
+  "watch": {
+    "include": ["app/**", "lambda/**", "cdk_rag/**", "config/**"],
+    "exclude": ["**/__pycache__"]
+  },
+  "context": {
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/aws-lambda:useCdkManagedLogGroup": true
+  }
+}
