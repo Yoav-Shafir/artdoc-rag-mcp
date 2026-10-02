@@ -7,9 +7,27 @@ longer exist in the database.
 Run: uv run poe batch
 """
 
+import json
 import logging
+import os
 
+import boto3
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+
+def load_db_secret() -> None:
+	"""Copy RDS_* credentials from Secrets Manager into the environment, before config loads."""
+	secret_name = os.environ.get("AWS_SECRET_NAME")
+	if not secret_name:
+		return
+	client = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+	secret = json.loads(client.get_secret_value(SecretId=secret_name)["SecretString"])
+	for key in ("RDS_HOSTNAME", "RDS_PORT", "RDS_USERNAME", "RDS_PASSWORD", "RDS_DB_NAME"):
+		if key in secret:
+			os.environ[key] = str(secret[key])
+
+
+load_db_secret()
 
 from app.config import config
 from app.db import Database, FileRecord
