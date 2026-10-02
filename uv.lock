@@ -196,6 +196,22 @@ wheels = [
 ]
 
 [[package]]
+name = "aws-cdk-aws-batch-alpha"
+version = "2.72.1a0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aws-cdk-lib" },
+    { name = "constructs" },
+    { name = "jsii" },
+    { name = "publication" },
+    { name = "typeguard" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cf/f6/63f219d6166f1afadf03f2d508b4752c6b8a9e7e9c72234ee033819b5104/aws-cdk.aws-batch-alpha-2.72.1a0.tar.gz", hash = "sha256:82ae33ebc7d923237475335d7a02b63fe3cd1c78d926c4b439b860236bb20275", size = 130498, upload-time = "2023-03-31T15:16:31.505Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/8f/72d39bfd742fd52b7e47a0f79b25f72876bc110056fc4016e40e95775e5e/aws_cdk.aws_batch_alpha-2.72.1a0-py3-none-any.whl", hash = "sha256:adf848f70255a710f45d502b647a893872e7a0d6351775112ce68f3de54489c0", size = 129188, upload-time = "2023-03-31T15:15:26.771Z" },
+]
+
+[[package]]
 name = "aws-cdk-cloud-assembly-schema"
 version = "39.2.20"
 source = { registry = "https://pypi.org/simple" }
@@ -2811,6 +2827,7 @@ dependencies = [
 
 [package.dev-dependencies]
 cdk = [
+    { name = "aws-cdk-aws-batch-alpha" },
     { name = "aws-cdk-lib" },
     { name = "constructs" },
 ]
@@ -2837,6 +2854,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 cdk = [
+    { name = "aws-cdk-aws-batch-alpha" },
     { name = "aws-cdk-lib", specifier = "==2.181.1" },
     { name = "constructs", specifier = ">=10.8.1" },
 ]

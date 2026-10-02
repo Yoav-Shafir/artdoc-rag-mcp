@@ -33,6 +33,12 @@ class S3Settings(BaseSettings):
     secret_key: str | None = None  # MinIO only
     region: str = "eu-west-2"
     bucket: str = "overstone-rag-documents"
+    # true: keys are <accountId>/<fileId> (dev bucket); false: <fileId> at the root (prod bucket)
+    account_folders: bool = True
+
+    def key(self, account_id: int, file_id: str) -> str:
+        """The S3 key of a file, following the bucket's layout."""
+        return f"{account_id}/{file_id}" if self.account_folders else file_id
 
 
 class ChromaSettings(BaseSettings):

@@ -55,8 +55,8 @@ def stored_metadata(collection, account_id: int) -> dict[str, tuple]:
 
 def ingest_file(record: FileRecord, bucket: str, storage, splitter, embeddings, collection, textract) -> int:
     """Fetch, parse, chunk, embed and store one PDF. Returns the number of chunks stored."""
-    # Objects are stored under the account's folder: <accountId>/<fileId>, e.g. 46/062d2aed-...pdf
-    obj = storage.get_object(bucket, f"{record.account_id}/{record.file_id}")
+    # Dev bucket: <accountId>/<fileId>, e.g. 46/062d2aed-...pdf; prod bucket: <fileId> (S3_ACCOUNT_FOLDERS)
+    obj = storage.get_object(bucket, config.s3.key(record.account_id, record.file_id))
     pages = parse_pdf(obj.body, record.file_id, textract)
 
     # IDs and the category go on the chunks (category allows filtering by document type);
@@ -117,11 +117,50 @@ def ingest_account(account_id: int, bucket: str, db, storage, splitter, embeddin
     return counts
 
 
+def check_s3(account_id: int, bucket: str, db, storage):
+    """Check which files exist in S3 without downloading."""
+    files = db.files_for_account(account_id)
+    logger.info(f"Account {account_id}: {len(files)} files in database")
+
+    s3 = boto3.client("s3", region_name=config.s3.region)
+    found = 0
+    missing = []
+    for record in files:
+        key = config.s3.key(record.account_id, record.file_id)
+        try:
+            s3.head_object(Bucket=bucket, Key=key)
+            found += 1
+        except Exception:
+            missing.append(f"  - {key} ({record.name})")
+
+    logger.info(f"  Found in S3: {found}")
+    logger.info(f"  Missing from S3: {len(missing)}")
+    if missing and len(missing) <= 10:
+        for m in missing:
+            logger.info(m)
+    elif missing:
+        for m in missing[:5]:
+            logger.info(m)
+        logger.info(f"  ... and {len(missing) - 5} more")
+
+
 def main():
-    """Run the ingestion for every account (or only the pilot account)."""
+    """Run ingestion or check S3. Use --check-only flag to just verify files without ingesting."""
+    import sys
+
+    check_only = "--check-only" in sys.argv
     db = Database()  # read-only access to the platform's MySQL
     storage = S3Storage()
     bucket = config.s3.bucket  # S3_BUCKET from .env: where the PDFs are read from
+
+    account_ids = db.list_account_ids(PILOT_ACCOUNT_ID)
+    logger.info(f"{'Checking' if check_only else 'Ingesting'} {len(account_ids)} account(s): {account_ids}")
+
+    if check_only:
+        for account_id in account_ids:
+            check_s3(account_id, bucket, db, storage)
+        return
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=config.chunking.size,  # 1000
         chunk_overlap=config.chunking.overlap,  # 150
@@ -129,9 +168,6 @@ def main():
     embeddings = make_embeddings()  # BedrockEmbeddings instance: AWS Bedrock Titan v2
     collection = make_collection()  # ChromaDB collection object: connected to overstone-assets
     textract = make_textract()  # boto3 Textract client: AWS OCR service for scanned PDFs
-
-    account_ids = db.list_account_ids(PILOT_ACCOUNT_ID)
-    logger.info(f"Ingesting {len(account_ids)} account(s): {account_ids}")
 
     for account_id in account_ids:
         counts = ingest_account(account_id, bucket, db, storage, splitter, embeddings, collection, textract)

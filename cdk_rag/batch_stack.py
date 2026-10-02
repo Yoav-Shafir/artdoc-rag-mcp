@@ -97,8 +97,6 @@ class OverstoneBatchStack(Stack):
 			compute_resources=batch.ComputeResources(
 				type=batch.ComputeResourceType.FARGATE,
 				vpc=vpc,
-				subnets=[ec2.Subnet.from_subnet_id(self, f"subnet-{i}", sid) for i, sid in enumerate(PRIVATE_SUBNET_IDS)],
-				security_groups=[security_group],
 			),
 			service_role=batch_role,
 		)

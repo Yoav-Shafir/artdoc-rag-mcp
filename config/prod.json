@@ -1,9 +1,12 @@
 {
   "PYTHON_ENV": "prod",
   "AWS_SECRET_NAME": "web-platform-server-v2",
+  "S3_BUCKET": "overstone-wp-files-prod-sse",
+  "S3_REGION": "eu-west-1",
+  "S3_ACCOUNT_FOLDERS": "false",
   "RDS_PORT": "3306",
   "RDS_DB_NAME": "overstone_v2",
-  "CHROMA_HOST": "TODO-chroma-private-ip",
+  "CHROMA_HOST": "10.0.30.114",
   "CHROMA_PORT": "8000",
   "CHROMA_COLLECTION": "overstone-assets",
   "EMBEDDINGS_MODEL": "amazon.titan-embed-text-v2:0",
