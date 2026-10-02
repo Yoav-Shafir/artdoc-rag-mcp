@@ -1,0 +1,8 @@
+# Shared dependencies for Lambda query and Batch ingestion
+boto3==1.43.102
+chromadb-client==1.5.9
+langchain-aws==1.7.9
+langchain-core==1.6.5
+pydantic-settings==2.15.0
+pymysql==1.2.3
+python-dotenv

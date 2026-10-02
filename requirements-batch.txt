@@ -1,0 +1,8 @@
+# Batch ingestion dependencies
+# Includes shared base + batch-specific packages for PDF processing
+
+-r requirements.txt
+
+langchain-text-splitters==0.3.2
+pypdf==5.1.0
+pypdfium2==4.30.0
