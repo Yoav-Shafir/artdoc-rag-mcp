@@ -10,6 +10,7 @@ Run: uv run poe batch
 import json
 import logging
 import os
+from collections import Counter
 
 import boto3
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -40,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 # Pilot: only this account is ingested. Set to None to ingest every account.
 PILOT_ACCOUNT_ID = 46
-# Test runs: process at most this many files per account. Set to None for no limit.
-MAX_FILES_PER_ACCOUNT = 50
+# Demo runs: process at most this many files per category. Set to None for no limit.
+MAX_FILES_PER_CATEGORY = 10
 
 
 def stored_metadata(collection, account_id: int) -> dict[str, tuple]:
@@ -81,6 +82,19 @@ def ingest_file(record: FileRecord, bucket: str, storage, splitter, embeddings, 
     )
     return len(chunks)
 
+def limit_per_category(files: list[FileRecord], limit: int | None) -> list[FileRecord]:
+    """The first `limit` files of each category (all files when limit is None)."""
+    if limit is None:
+        return files
+    seen = Counter()
+    selected = []
+    for record in files:
+        if seen[record.category] < limit:
+            seen[record.category] += 1
+            selected.append(record)
+    return selected
+
+
 def ingest_account(account_id: int, bucket: str, db, storage, splitter, embeddings, collection, textract) -> dict:
     """Ingest an account's new PDFs, then remove chunks of deleted files."""
     counts = {"ingested": 0, "unchanged": 0, "failed": 0, "deleted": 0}
@@ -88,7 +102,7 @@ def ingest_account(account_id: int, bucket: str, db, storage, splitter, embeddin
     stored = stored_metadata(collection, account_id)
 
     # The limit applies to processing only; the deletion check below still uses every file.
-    for record in files[:MAX_FILES_PER_ACCOUNT]:
+    for record in limit_per_category(files, MAX_FILES_PER_CATEGORY):
         # File content never changes, so a file with chunks is done, unless its asset or
         # category changed in the database (then its chunks' metadata is out of date).
         if stored.get(record.file_id) == (record.asset_id, record.category):
@@ -121,6 +135,8 @@ def check_s3(account_id: int, bucket: str, db, storage):
     """Check which files exist in S3 without downloading."""
     files = db.files_for_account(account_id)
     logger.info(f"Account {account_id}: {len(files)} files in database")
+    for category, count in Counter(record.category for record in files).most_common():
+        logger.info(f"  {category}: {count} files")
 
     s3 = boto3.client("s3", region_name=config.s3.region)
     found = 0
