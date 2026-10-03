@@ -1,8 +1,9 @@
 """Query Lambda: answers one user query for one account.
 
 Event:    {"query": "Who issued the invoice?", "accountId": 46}
-Response: the dict from app.query.ask(): kind, filters, document_query, and
-          answer + hits ('answer' queries) or assets ('list' queries).
+Response: the dict from app.query.ask(): kind, filters, document_category,
+          document_query, and answer + hits ('answer' queries) or assets
+          ('list' queries, at most RETRIEVAL_LIST_MAX_ASSETS when scored).
           Bad input -> {"error": "..."}.
 
 Configuration comes from environment variables (config/<env>.json in the CDK

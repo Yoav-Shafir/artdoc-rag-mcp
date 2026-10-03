@@ -6,15 +6,19 @@
 2. Filters filled in -> MySQL narrows the search to the matching assets.
    No filters -> no SQL; the search covers the whole account.
 3. Vector search within that scope.
+   A document type ("certificates", "insurance policies") narrows the search to chunks
+   of that file category, exactly, without SQL.
 4. kind decides the output:
    'answer' -> the top chunks go to the LLM, which writes an answer with citations.
-   'list'   -> every matching asset, ranked by its best chunk.
+   'list'   -> the best matching assets (score cutoff, see cut_noise()), ranked by their
+               best chunk; or, for a document type alone, every asset that has one.
 
 Run: uv run poe ask "Who issued the invoice for Interieur?"
 """
 
 import sys
 
+from app.config import config
 from app.db import Database
 from app.hybrid_search import rank_assets
 from app.planner import plan
@@ -28,10 +32,19 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
     """Plan the query, search within its scope, and return a list or an answer."""
     query_plan = plan(query, llm)
     filters = query_plan.filters.model_dump(exclude_none=True, mode="json")
-    result = {"kind": query_plan.kind, "filters": filters, "document_query": query_plan.document_query}
+    category = query_plan.document_category.value if query_plan.document_category else None
+    result = {
+        "kind": query_plan.kind,
+        "filters": filters,
+        "document_category": category,
+        "document_query": query_plan.document_query,
+    }
 
     # Scope: the account, narrowed to the SQL candidates only when there are filters.
     where = {"accountId": account_id}  # tenant filter, always
+    if category:
+        # The document type lives on the chunks, so it narrows the Chroma search directly.
+        where = {"$and": [where, {"category": category}]}
     asset_ids = None
     if filters:
         asset_ids = db.candidate_asset_ids(account_id, query_plan.filters)
@@ -45,14 +58,23 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
 
     if query_plan.kind == "list":
         if not query_plan.document_query:
-            # Filters only ("show me all paintings"): the SQL result is the answer.
-            result["assets"] = [{"assetId": asset_id, "score": None} for asset_id in asset_ids or []]
+            if category:
+                # Document type only ("which assets have a certificate?"): an exact answer,
+                # the assets that have at least one chunk of that type. No scores, no cutoff.
+                stored = collection.get(where=where, include=["metadatas"])["metadatas"]
+                result["assets"] = [
+                    {"assetId": asset_id, "score": None}
+                    for asset_id in sorted({meta["assetId"] for meta in stored})
+                ]
+            else:
+                # Filters only ("show me all paintings"): the SQL result is the answer.
+                result["assets"] = [{"assetId": asset_id, "score": None} for asset_id in asset_ids or []]
             add_asset_names(db, result["assets"])
             return result
         # All chunks in scope, so no matching asset is cut off; then one entry per asset.
         total = len(collection.get(where=where, include=[])["ids"])
         chunks = vector_search(collection, embeddings, query_plan.document_query, where, total)
-        result["assets"] = rank_assets(chunks, asset_ids or [])
+        result["assets"] = cut_noise(rank_assets(chunks, asset_ids or []))
         add_asset_names(db, result["assets"])
         return result
 
@@ -62,6 +84,21 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
     result["hits"] = hits
     result["answer"] = answer(llm, query, hits) if hits else "No documents found."
     return result
+
+
+def cut_noise(ranked: list[dict]) -> list[dict]:
+    """Keep the best-scoring assets of a ranked 'list' result, dropping the noise tail.
+
+    Every asset in scope gets a similarity score, even ones unrelated to the query
+    (e.g. 0.006 for a sofa's valuation report), so without a cutoff a 'list' query
+    returns the whole account. Assets without documents (score None) are dropped too:
+    they cannot match a document query.
+    """
+    kept = [
+        asset for asset in ranked
+        if asset["score"] is not None and asset["score"] >= config.retrieval.list_min_score
+    ]
+    return kept[: config.retrieval.list_max_assets]
 
 
 def add_asset_names(db, assets: list[dict]) -> None:
@@ -101,7 +138,10 @@ def main():
 
     result = ask(query, ACCOUNT_ID, db, llm, embeddings, collection)
     print(f"QUERY: {query}")
-    print(f"  kind: {result['kind']} | filters: {result['filters']} | document_query: {result['document_query']}")
+    print(
+        f"  kind: {result['kind']} | filters: {result['filters']} | "
+        f"category: {result['document_category']} | document_query: {result['document_query']}"
+    )
 
     if result["kind"] == "list":
         print(f"\n{len(result['assets'])} asset(s), best match first:")

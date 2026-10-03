@@ -14,6 +14,7 @@ Run: uv run poe planner   (prints the plan for a few sample prompts)
 
 import difflib
 import logging
+import re
 from enum import Enum
 from typing import Literal
 
@@ -77,6 +78,25 @@ class Period(str, Enum):
     POST_WAR = "POST-WAR (1945-1970)"  # category.id 3
     CONTEMPORARY = "CONTEMPORARY (1970-2000)"  # category.id 4
     C21 = "21st CENTURY (post-2000)"  # category.id 5
+
+
+class DocumentCategory(str, Enum):
+    """file.category in MySQL, for the PDF categories we ingest (IMAGES/CR_IMAGE are never ingested).
+
+    Unlike the enums above this is NOT an asset column: every chunk in ChromaDB
+    carries its file's category, so this filter is applied in the vector search
+    (Chroma `where`), not in SQL.
+    """
+
+    VALUATION_REPORTS = "VALUATION_REPORTS"
+    VALUATION_SENSE_CHECK_REPORTS = "VALUATION_SENSE_CHECK_REPORTS"
+    PROVENANCE = "PROVENANCE"
+    EXHIBITION_AND_LITERATURE = "EXHIBITION_AND_LITERATURE"
+    CERTIFICATE_OF_AUTHENTICITY = "CERTIFICATE_OF_AUTHENTICITY"
+    INSURANCE_POLICY = "INSURANCE_POLICY"
+    ART_LOST_REGISTER = "ART_LOST_REGISTER"
+    TA_EXPORT = "TA_EXPORT"
+    CITES = "CITES"
 
 
 def closest_value(value, enum: type[Enum]):
@@ -174,13 +194,46 @@ class QueryPlan(BaseModel):
         default_factory=AssetFilters,
         description="Filters on asset columns. All empty if the prompt names none.",
     )
+    # Why a separate field and not part of `filters`: `filters` become SQL on asset
+    # columns, while the document type is stored on the chunks in ChromaDB. An exact
+    # type filter beats vector similarity for "which assets have a <document type>":
+    # scores measure wording overlap, so e.g. a loan form that mentions insurance can
+    # outscore the insurance policy itself.
+    document_category: DocumentCategory | None = Field(
+        None,
+        # Strict on purpose: this is a hard filter, so a guessed category hides matches in
+        # other document types (purchase details also appear in valuation reports, loan
+        # forms, ...). Aliases below are names of document types only, never topics.
+        # See docs/FILTER_DILEMMAS.md.
+        description="Type of document. Only when the user explicitly names a type of document "
+        "(e.g. 'certificates', 'the insurance policy', 'provenance documents'). Never infer "
+        "it from the topic: 'bought at Doyle' or 'insured for' name no document type, so "
+        "leave it empty. "
+        "VALUATION_REPORTS = valuation reports, appraisals; "
+        "VALUATION_SENSE_CHECK_REPORTS = valuation sense checks; "
+        "PROVENANCE = provenance documents, bills of sale, purchase invoices; "
+        "EXHIBITION_AND_LITERATURE = exhibitions, loans, catalogues, literature; "
+        "CERTIFICATE_OF_AUTHENTICITY = certificates of authenticity; "
+        "INSURANCE_POLICY = insurance policies, certificates of cover; "
+        "ART_LOST_REGISTER = Art Loss Register checks; "
+        "TA_EXPORT = export licences; CITES = CITES permits.",
+    )
     document_query: str | None = Field(
         # If the LLM doesn't fill it, default to None
         None,
         description="Everything the prompt asks about the *content of documents* "
         "(provenance, invoices, reports, ...), rewritten as a short search query. "
-        "Empty if the prompt only uses asset filters.",
+        "Empty if the prompt only uses asset filters or only names a document type.",
     )
+
+    # Same near-miss fixing as for medium/period: "certificate of authenticity" ->
+    # CERTIFICATE_OF_AUTHENTICITY.
+    @field_validator("document_category", mode="before")
+    @classmethod
+    def _closest_category(cls, value):
+        if isinstance(value, str):
+            value = value.strip().replace(" ", "_")
+        return closest_value(value, DocumentCategory)
 
 
 # --- Instructions for the LLM -------------------------------------------------
@@ -195,7 +248,43 @@ Examples:
 - "paintings" -> medium PAINTING (and asset_type FINE_ART only if the user says fine art)
 - "sculptures" -> medium 3D
 - "post-war" -> period POST-WAR (1945-1970)
+- "which assets have a certificate of authenticity?" -> kind list,
+  document_category CERTIFICATE_OF_AUTHENTICITY, document_query empty
+- "what does the insurance policy say about transit?" -> kind answer,
+  document_category INSURANCE_POLICY, document_query "cover during transit"
+- "which assets were bought at a Doyle auction?" -> kind list, document_category empty
+  (no document type named), document_query "bought at a Doyle auction"
 """
+
+
+# --- Safety net for document_category -----------------------------------------
+# The prompt tells the LLM to set document_category only when the user names a
+# document type, but in testing it still guessed from the topic ("insured for more
+# than $100k" -> INSURANCE_POLICY, "exhibited in museums" -> EXHIBITION_AND_LITERATURE).
+# A guessed category is a hard filter that hides matches in other document types, so
+# code has the last word: the category is kept only if one of its type words is in
+# the prompt. A missing word only loses the filter (search everything), never results.
+# See docs/FILTER_DILEMMAS.md.
+CATEGORY_WORDS = {
+    DocumentCategory.VALUATION_REPORTS: ["valuation", "appraisal"],
+    DocumentCategory.VALUATION_SENSE_CHECK_REPORTS: ["sense check"],
+    DocumentCategory.PROVENANCE: ["provenance", "bill of sale", "bills of sale", "invoice"],
+    DocumentCategory.EXHIBITION_AND_LITERATURE: [
+        "exhibition document", "exhibition record", "loan form", "loan agreement",
+        "catalogue", "catalog", "literature",
+    ],
+    DocumentCategory.CERTIFICATE_OF_AUTHENTICITY: ["certificate of authenticity", "certificate", "coa"],
+    DocumentCategory.INSURANCE_POLICY: ["insurance policy", "policy", "certificate of cover"],
+    DocumentCategory.ART_LOST_REGISTER: ["art loss register", "art lost register", "alr"],
+    DocumentCategory.TA_EXPORT: ["export licence", "export license"],
+    DocumentCategory.CITES: ["cites"],
+}
+
+
+def names_category(prompt: str, category: DocumentCategory) -> bool:
+    """True when the prompt contains one of the category's type words (whole words, any case)."""
+    text = prompt.lower()
+    return any(re.search(rf"\b{re.escape(word)}", text) for word in CATEGORY_WORDS[category])
 
 
 def plan(prompt: str, llm) -> QueryPlan:
@@ -210,7 +299,14 @@ def plan(prompt: str, llm) -> QueryPlan:
     # document_query: (string) "
     
     planner = llm.with_structured_output(QueryPlan)
-    return planner.invoke([SystemMessage(PLANNER_PROMPT), HumanMessage(prompt)])
+    query_plan = planner.invoke([SystemMessage(PLANNER_PROMPT), HumanMessage(prompt)])
+
+    # Drop a document_category the user didn't name (see CATEGORY_WORDS above).
+    category = query_plan.document_category
+    if category is not None and not names_category(prompt, category):
+        logger.info(f"Dropped document_category {category.value}: no document type named")
+        query_plan.document_category = None
+    return query_plan
 
 
 # Sample prompts covering the four cases: filters + documents, filters only,
@@ -232,6 +328,7 @@ def main():
         print(f"  kind:           {result.kind}")
         # exclude_none: only show the filters the LLM actually filled in.
         print(f"  filters:        {result.filters.model_dump(exclude_none=True, mode='json')}")
+        print(f"  category:       {result.document_category}")
         print(f"  document_query: {result.document_query}")
 
 

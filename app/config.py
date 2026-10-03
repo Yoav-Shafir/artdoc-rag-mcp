@@ -120,6 +120,12 @@ class RetrievalSettings(BaseSettings):
 
     top_k: int = Field(default=5, gt=0)
     min_score: float = 0.0
+    # 'list' queries rank every asset in scope, and vector search never says "no match":
+    # every asset gets some score. These cut the noise tail. A heuristic only: scores
+    # measure wording overlap, so keep the threshold low and use document_category for
+    # exact "which assets have a <document type>" questions.
+    list_min_score: float = 0.2
+    list_max_assets: int = Field(default=10, gt=0)
 
 
 class AppSettings(BaseModel):
