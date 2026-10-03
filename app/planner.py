@@ -129,6 +129,13 @@ def closest_value(value, enum: type[Enum]):
     return None
 
 
+def empty_to_none(value):
+    """None for an empty answer the LLM wrote as text ("", "null", "none"), else the value."""
+    if isinstance(value, str) and value.strip().lower() in ("", "null", "none"):
+        return None
+    return value
+
+
 # --- The form the LLM fills in ------------------------------------------------
 # Every field is optional (None): the LLM fills in only what the prompt mentions.
 # The field descriptions are the LLM's only documentation, so they say exactly
@@ -179,6 +186,13 @@ class AssetFilters(BaseModel):
     def _closest_allowed(cls, value, info: ValidationInfo):
         return closest_value(value, Medium if info.field_name == "medium" else Period)
 
+    # Same "null"-as-text guard as QueryPlan.document_query: an artist "null" would
+    # otherwise become a SQL filter matching no asset.
+    @field_validator("artist", mode="before")
+    @classmethod
+    def _empty_artist_to_none(cls, value):
+        return empty_to_none(value)
+
 
 class QueryPlan(BaseModel):
     """How to handle one user prompt."""
@@ -211,7 +225,7 @@ class QueryPlan(BaseModel):
         "leave it empty. "
         "VALUATION_REPORTS = valuation reports, appraisals; "
         "VALUATION_SENSE_CHECK_REPORTS = valuation sense checks; "
-        "PROVENANCE = provenance documents, bills of sale, purchase invoices; "
+        "PROVENANCE = provenance documents, bills of sale; "
         "EXHIBITION_AND_LITERATURE = exhibitions, loans, catalogues, literature; "
         "CERTIFICATE_OF_AUTHENTICITY = certificates of authenticity; "
         "INSURANCE_POLICY = insurance policies, certificates of cover; "
@@ -225,6 +239,15 @@ class QueryPlan(BaseModel):
         "(provenance, invoices, reports, ...), rewritten as a short search query. "
         "Empty if the prompt only uses asset filters or only names a document type.",
     )
+
+    # The LLM sometimes writes the word "null" (a string) instead of an empty value, e.g.
+    # document_query="null" for "Show me all paintings". Pydantic accepts it as text, so
+    # ask() would search the documents for "null" and the score cutoff would drop every
+    # asset. Turning it into None lets the "filters only" branch run as intended.
+    @field_validator("document_query", mode="before")
+    @classmethod
+    def _empty_query_to_none(cls, value):
+        return empty_to_none(value)
 
     # Same near-miss fixing as for medium/period: "certificate of authenticity" ->
     # CERTIFICATE_OF_AUTHENTICITY.
@@ -268,7 +291,9 @@ Examples:
 CATEGORY_WORDS = {
     DocumentCategory.VALUATION_REPORTS: ["valuation", "appraisal"],
     DocumentCategory.VALUATION_SENSE_CHECK_REPORTS: ["sense check"],
-    DocumentCategory.PROVENANCE: ["provenance", "bill of sale", "bills of sale", "invoice"],
+    # No "invoice": invoices are filed under several categories (e.g. the invoice for
+    # "Half of You" is a VALUATION_REPORTS file), so the word must not trigger a filter.
+    DocumentCategory.PROVENANCE: ["provenance", "bill of sale", "bills of sale"],
     DocumentCategory.EXHIBITION_AND_LITERATURE: [
         "exhibition document", "exhibition record", "loan form", "loan agreement",
         "catalogue", "catalog", "literature",
