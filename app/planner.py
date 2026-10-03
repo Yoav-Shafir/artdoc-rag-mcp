@@ -240,6 +240,14 @@ class QueryPlan(BaseModel):
         "Empty if the prompt only uses asset filters or only names a document type.",
     )
 
+    # Shown in the UI's "how your question was understood" panel. A short summary written
+    # with the plan, not step-by-step reasoning: cheaper, and enough to explain the result.
+    explanation: str | None = Field(
+        None,
+        description="One or two plain sentences for the user on how you read the request: "
+        "which filters, document type and search you chose, and why.",
+    )
+
     # The LLM sometimes writes the word "null" (a string) instead of an empty value, e.g.
     # document_query="null" for "Show me all paintings". Pydantic accepts it as text, so
     # ask() would search the documents for "null" and the score cutoff would drop every

@@ -13,31 +13,63 @@
    'list'   -> the best matching assets (score cutoff, see cut_noise()), ranked by their
                best chunk; or, for a document type alone, every asset that has one.
 
+The response shape is the contract with the UI: docs/RESPONSE_CONTRACT.md. Every key
+is always present (empty when it doesn't apply), so the UI never checks for missing keys.
+
 Run: uv run poe ask "Who issued the invoice for Interieur?"
 """
 
 import sys
+import time
 
 from app.config import config
 from app.db import Database
-from app.hybrid_search import rank_assets
 from app.planner import plan
 from app.rag import answer, make_collection, make_embeddings, make_llm
 
 ACCOUNT_ID = 46  # mocked logged-in account
 ANSWER_CHUNKS = 3  # how many chunks the LLM sees for an 'answer' query
+EVIDENCE_PER_ASSET = 3  # passages shown under each asset of a ranked 'list'
+RESPONSE_VERSION = 1  # bump when the response shape changes (docs/RESPONSE_CONTRACT.md)
+
+
+def empty_response(query: str) -> dict:
+    """The response skeleton: every key the UI reads, with empty values."""
+    return {
+        "version": RESPONSE_VERSION,
+        "query": query,
+        "kind": None,
+        "plan": {"filters": {}, "document_category": None, "document_query": None, "explanation": None},
+        "trace": {"sql_candidates": None, "chunks_searched": 0, "cutoff": None, "timings_ms": {}},
+        "answer": None,
+        "citations": [],
+        "assets": [],
+        "total_assets": 0,
+        "error": None,
+    }
+
+
+def error_response(query: str, message: str) -> dict:
+    """Same shape as a normal response, with `error` set (bad input, or a failure)."""
+    return {**empty_response(query), "error": message}
 
 
 def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
     """Plan the query, search within its scope, and return a list or an answer."""
+    started = time.perf_counter()
+    result = empty_response(query)
+    timings = result["trace"]["timings_ms"]
+
     query_plan = plan(query, llm)
+    timings["plan"] = elapsed_ms(started)
     filters = query_plan.filters.model_dump(exclude_none=True, mode="json")
     category = query_plan.document_category.value if query_plan.document_category else None
-    result = {
-        "kind": query_plan.kind,
+    result["kind"] = query_plan.kind
+    result["plan"] = {
         "filters": filters,
         "document_category": category,
         "document_query": query_plan.document_query,
+        "explanation": query_plan.explanation,
     }
 
     # Scope: the account, narrowed to the SQL candidates only when there are filters.
@@ -48,42 +80,101 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
     asset_ids = None
     if filters:
         asset_ids = db.candidate_asset_ids(account_id, query_plan.filters)
+        result["trace"]["sql_candidates"] = len(asset_ids)
         if not asset_ids:  # nothing passes the filters: nothing to search
-            if query_plan.kind == "list":
-                result["assets"] = []
-            else:
+            if query_plan.kind == "answer":
                 result["answer"] = "No assets match the filters."
-            return result
+            return finish(result, started)
         where = {"$and": [where, {"assetId": {"$in": asset_ids}}]}
+
+    search_started = time.perf_counter()
+    in_scope = len(collection.get(where=where, include=[])["ids"])
+    result["trace"]["chunks_searched"] = in_scope
 
     if query_plan.kind == "list":
         if not query_plan.document_query:
             if category:
                 # Document type only ("which assets have a certificate?"): an exact answer,
-                # the assets that have at least one chunk of that type. No scores, no cutoff.
+                # the assets that have at least one chunk of that type. No scores, no cutoff;
+                # the evidence is the file of that type (the "why" is the category itself).
                 stored = collection.get(where=where, include=["metadatas"])["metadatas"]
-                result["assets"] = [
-                    {"assetId": asset_id, "score": None}
-                    for asset_id in sorted({meta["assetId"] for meta in stored})
-                ]
+                assets = category_assets(stored)
             else:
                 # Filters only ("show me all paintings"): the SQL result is the answer.
-                result["assets"] = [{"assetId": asset_id, "score": None} for asset_id in asset_ids or []]
-            add_asset_names(db, result["assets"])
-            return result
-        # All chunks in scope, so no matching asset is cut off; then one entry per asset.
-        total = len(collection.get(where=where, include=[])["ids"])
-        chunks = vector_search(collection, embeddings, query_plan.document_query, where, total)
-        result["assets"] = cut_noise(rank_assets(chunks, asset_ids or []))
-        add_asset_names(db, result["assets"])
-        return result
+                assets = [{"assetId": asset_id, "score": None, "evidence": []} for asset_id in asset_ids or []]
+        else:
+            # All chunks in scope, so no matching asset is cut off; then one entry per asset.
+            chunks = vector_search(collection, embeddings, query_plan.document_query, where, in_scope)
+            result["trace"]["cutoff"] = {
+                "min_score": config.retrieval.list_min_score,
+                "max_assets": config.retrieval.list_max_assets,
+            }
+            assets = cut_noise(group_by_asset(chunks))
+        timings["search"] = elapsed_ms(search_started)
+        result["assets"] = add_names(db, assets)
+        result["total_assets"] = len(result["assets"])
+        return finish(result, started)
 
     # 'answer': only the best few chunks, then the LLM writes the answer.
     chunks = vector_search(collection, embeddings, query_plan.document_query or query, where, ANSWER_CHUNKS)
-    hits = to_hits(db, chunks)
-    result["hits"] = hits
-    result["answer"] = answer(llm, query, hits) if hits else "No documents found."
+    timings["search"] = elapsed_ms(search_started)
+    citations = to_citations(db, chunks)
+    result["citations"] = citations
+    answer_started = time.perf_counter()
+    if citations:
+        # answer() numbers the sources [1], [2], ... in this order, so [n] = citations[n-1].
+        sources = [{"label": f"{c['fileName']}, page {c['page']}", "text": c["text"]} for c in citations]
+        result["answer"] = answer(llm, query, sources)
+    else:
+        result["answer"] = "No documents found."
+    timings["answer"] = elapsed_ms(answer_started)
+    return finish(result, started)
+
+
+def finish(result: dict, started: float) -> dict:
+    """Record the total time and return the response."""
+    result["trace"]["timings_ms"]["total"] = elapsed_ms(started)
     return result
+
+
+def elapsed_ms(started: float) -> int:
+    return round((time.perf_counter() - started) * 1000)
+
+
+def passage(text, meta: dict, distance) -> dict:
+    """One evidence passage or citation: where it is, how well it matched, and its text."""
+    return {
+        "assetId": meta["assetId"],
+        "fileId": meta["fileId"],
+        "page": meta.get("page"),
+        "category": meta.get("category"),
+        "score": None if distance is None else 1 - distance,  # cosine distance -> similarity
+        "text": text,
+    }
+
+
+def group_by_asset(chunks: dict) -> list[dict]:
+    """Ranked chunks -> one entry per asset, scored by its best chunk, with its top passages.
+
+    Chunks arrive best first, so each asset's first chunk is its best and sets its score.
+    """
+    assets = {}  # assetId -> entry, in order of first (= best) appearance
+    for text, meta, distance in zip(chunks["documents"][0], chunks["metadatas"][0], chunks["distances"][0]):
+        entry = assets.setdefault(meta["assetId"], {"assetId": meta["assetId"], "score": 1 - distance, "evidence": []})
+        if len(entry["evidence"]) < EVIDENCE_PER_ASSET:
+            entry["evidence"].append(passage(text, meta, distance))
+    return list(assets.values())
+
+
+def category_assets(stored: list[dict]) -> list[dict]:
+    """Assets that have a document of the filtered category, with that file as evidence."""
+    assets = {}
+    for meta in stored:
+        entry = assets.setdefault(meta["assetId"], {"assetId": meta["assetId"], "score": None, "evidence": []})
+        if all(item["fileId"] != meta["fileId"] for item in entry["evidence"]):
+            # One entry per file (not per chunk); no text or score: the match is exact.
+            entry["evidence"].append({**passage(None, meta, None), "page": None})
+    return sorted(assets.values(), key=lambda asset: asset["assetId"])
 
 
 def cut_noise(ranked: list[dict]) -> list[dict]:
@@ -91,21 +182,22 @@ def cut_noise(ranked: list[dict]) -> list[dict]:
 
     Every asset in scope gets a similarity score, even ones unrelated to the query
     (e.g. 0.006 for a sofa's valuation report), so without a cutoff a 'list' query
-    returns the whole account. Assets without documents (score None) are dropped too:
-    they cannot match a document query.
+    returns the whole account.
     """
-    kept = [
-        asset for asset in ranked
-        if asset["score"] is not None and asset["score"] >= config.retrieval.list_min_score
-    ]
+    kept = [asset for asset in ranked if asset["score"] >= config.retrieval.list_min_score]
     return kept[: config.retrieval.list_max_assets]
 
 
-def add_asset_names(db, assets: list[dict]) -> None:
-    """Add "assetName" to each asset (names live in MySQL, not on the chunks)."""
-    names = db.asset_names([asset["assetId"] for asset in assets])
-    for asset in assets:
-        asset["assetName"] = names.get(asset["assetId"])
+def add_names(db, assets: list[dict]) -> list[dict]:
+    """Add rank, assetName and each evidence's fileName (names live in MySQL, not on chunks)."""
+    asset_names = db.asset_names([asset["assetId"] for asset in assets])
+    file_names = db.file_names(list({item["fileId"] for asset in assets for item in asset["evidence"]}))
+    for rank, asset in enumerate(assets, start=1):
+        asset["rank"] = rank
+        asset["assetName"] = asset_names.get(asset["assetId"])
+        for item in asset["evidence"]:
+            item["fileName"] = file_names.get(item["fileId"])
+    return assets
 
 
 def vector_search(collection, embeddings, text: str, where: dict, n: int) -> dict:
@@ -116,18 +208,19 @@ def vector_search(collection, embeddings, text: str, where: dict, n: int) -> dic
     return collection.query(query_embeddings=[embeddings.embed_query(text)], n_results=n, where=where)
 
 
-def to_hits(db, chunks: dict) -> list[dict]:
-    """Chroma's result -> one dict per chunk, with a readable label for citations."""
-    hits = []
-    for text, meta, distance in zip(chunks["documents"][0], chunks["metadatas"][0], chunks["distances"][0]):
-        file_name = db.lookup_file(meta["fileId"]).name  # names live in MySQL, not on chunks
-        hits.append({
-            "text": text,
-            "metadata": meta,
-            "score": 1 - distance,  # cosine distance -> similarity
-            "label": f"{file_name}, page {meta['page']}",
-        })
-    return hits
+def to_citations(db, chunks: dict) -> list[dict]:
+    """Chroma's result -> numbered citations with asset and file names, for an 'answer'."""
+    citations = [
+        passage(text, meta, distance)
+        for text, meta, distance in zip(chunks["documents"][0], chunks["metadatas"][0], chunks["distances"][0])
+    ]
+    asset_names = db.asset_names(list({c["assetId"] for c in citations}))
+    file_names = db.file_names(list({c["fileId"] for c in citations}))
+    for number, citation in enumerate(citations, start=1):
+        citation["n"] = number  # matches [n] in the answer text
+        citation["assetName"] = asset_names.get(citation["assetId"])
+        citation["fileName"] = file_names.get(citation["fileId"])
+    return citations
 
 
 def main():
@@ -137,21 +230,26 @@ def main():
     embeddings, collection = make_embeddings(), make_collection()
 
     result = ask(query, ACCOUNT_ID, db, llm, embeddings, collection)
+    query_plan = result["plan"]
     print(f"QUERY: {query}")
     print(
-        f"  kind: {result['kind']} | filters: {result['filters']} | "
-        f"category: {result['document_category']} | document_query: {result['document_query']}"
+        f"  kind: {result['kind']} | filters: {query_plan['filters']} | "
+        f"category: {query_plan['document_category']} | document_query: {query_plan['document_query']}"
     )
+    print(f"  explanation: {query_plan['explanation']}")
+    print(f"  trace: {result['trace']}")
 
     if result["kind"] == "list":
-        print(f"\n{len(result['assets'])} asset(s), best match first:")
-        for number, asset in enumerate(result["assets"], start=1):
-            score = "no documents" if asset["score"] is None else f"score {asset['score']:.3f}"
-            print(f"{number}. asset {asset['assetId']} {asset['assetName']!r}  {score}")
+        print(f"\n{result['total_assets']} asset(s), best match first:")
+        for asset in result["assets"]:
+            score = "exact match" if asset["score"] is None else f"score {asset['score']:.3f}"
+            print(f"{asset['rank']}. asset {asset['assetId']} {asset['assetName']!r}  {score}")
+            for item in asset["evidence"][:1]:
+                print(f"     {item['fileName']}, page {item['page']} ({item['category']})")
     else:
         print(f"\nA: {result['answer']}")
-        for number, hit in enumerate(result.get("hits", []), start=1):
-            print(f"   [{number}] {hit['label']} ({hit['metadata'].get('category')})")
+        for citation in result["citations"]:
+            print(f"   [{citation['n']}] {citation['fileName']}, page {citation['page']} ({citation['category']})")
 
 
 if __name__ == "__main__":

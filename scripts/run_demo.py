@@ -37,23 +37,29 @@ def invoke(client, function: str, query: str, account_id: int) -> dict:
 def print_result(number: int, item: dict, result: dict, seconds: float) -> None:
     """One compact block per query: how it was planned, then the answer or the ranked assets."""
     print(f"\n{'=' * 90}\n{number}. {item['query']}\n   shows: {item['shows']}  ({seconds:.1f}s)")
-    if "errorMessage" in result or "error" in result:
-        print(f"   ERROR: {result.get('errorMessage') or result.get('error')}")
+    if result.get("error") or "errorMessage" in result:
+        print(f"   ERROR: {result.get('error') or result.get('errorMessage')}")
         return
+    query_plan = result["plan"]
     print(
-        f"   plan: kind={result['kind']} filters={result['filters']} "
-        f"category={result.get('document_category')} document_query={result['document_query']!r}"
+        f"   plan: kind={result['kind']} filters={query_plan['filters']} "
+        f"category={query_plan['document_category']} document_query={query_plan['document_query']!r}"
     )
+    print(f"   why:  {query_plan['explanation']}")
     if result["kind"] == "answer":
         print(f"\n   {result['answer']}")
-        for index, hit in enumerate(result.get("hits", []), start=1):
-            print(f"     [{index}] {hit['label']} ({hit['metadata'].get('category')}, score {hit['score']:.3f})")
+        for citation in result["citations"]:
+            print(
+                f"     [{citation['n']}] {citation['fileName']}, page {citation['page']} "
+                f"({citation['category']}, score {citation['score']:.3f})"
+            )
     else:
-        assets = result.get("assets", [])
-        print(f"\n   {len(assets)} asset(s):")
+        assets = result["assets"]
+        print(f"\n   {result['total_assets']} asset(s):")
         for asset in assets[:MAX_ASSETS_SHOWN]:
-            score = "  -  " if asset["score"] is None else f"{asset['score']:.3f}"
-            print(f"     {score}  {asset['assetId']}  {asset['assetName']}")
+            score = "exact" if asset["score"] is None else f"{asset['score']:.3f}"
+            source = asset["evidence"][0]["fileName"] if asset["evidence"] else ""
+            print(f"     {score:>5}  {asset['assetId']}  {asset['assetName']}   <- {source}")
         if len(assets) > MAX_ASSETS_SHOWN:
             print(f"     ... and {len(assets) - MAX_ASSETS_SHOWN} more")
 

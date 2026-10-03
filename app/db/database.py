@@ -226,6 +226,15 @@ class Database:
         )
         return {row["id"]: row["name"] for row in rows}
 
+    def file_names(self, file_ids: list[str]) -> dict[str, str]:
+        """{fileId: file name} for the given files, in one query (names aren't stored on chunks)."""
+        if not file_ids:  # `IN ()` is invalid SQL
+            return {}
+        rows = self._query(
+            "SELECT fileId, name FROM file WHERE fileId IN %(ids)s", {"ids": tuple(file_ids)}
+        )
+        return {row["fileId"]: row["name"] for row in rows}
+
     def close(self) -> None:
         if self._connection is not None and self._connection.open:
             self._connection.close()

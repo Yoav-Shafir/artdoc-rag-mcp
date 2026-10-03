@@ -1,10 +1,9 @@
 """Query Lambda: answers one user query for one account.
 
 Event:    {"query": "Who issued the invoice?", "accountId": 46}
-Response: the dict from app.query.ask(): kind, filters, document_category,
-          document_query, and answer + hits ('answer' queries) or assets
-          ('list' queries, at most RETRIEVAL_LIST_MAX_ASSETS when scored).
-          Bad input -> {"error": "..."}.
+Response: the dict from app.query.ask(), shape in docs/RESPONSE_CONTRACT.md.
+          Bad input or a failure -> the same shape with "error" set, so the
+          caller always gets JSON it can render.
 
 Configuration comes from environment variables (config/<env>.json in the CDK
 stack). When AWS_SECRET_NAME is set, the database credentials (RDS_*) are read
@@ -14,6 +13,7 @@ Local run (uses .env): uv run poe lambda events/ask_answer.json
 """
 
 import json
+import logging
 import os
 import sys
 
@@ -36,8 +36,11 @@ def load_db_secret() -> None:
 load_db_secret()
 
 from app.db import Database  # noqa: E402
-from app.query import ask  # noqa: E402
+from app.query import ask, error_response  # noqa: E402
 from app.rag import make_collection, make_embeddings, make_llm  # noqa: E402
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 # Clients are created once per Lambda container and reused by warm invocations.
 _clients = None
@@ -54,14 +57,19 @@ def handler(event, context):
     query = (event or {}).get("query")
     account_id = (event or {}).get("accountId")
     if not query or not isinstance(query, str):
-        return {"error": "'query' (string) is required"}
+        return error_response(query, "'query' (string) is required")
     try:
         account_id = int(account_id)
     except (TypeError, ValueError):
-        return {"error": "'accountId' (integer) is required"}
+        return error_response(query, "'accountId' (integer) is required")
 
-    db, llm, embeddings, collection = clients()
-    return ask(query, account_id, db, llm, embeddings, collection)
+    try:
+        db, llm, embeddings, collection = clients()
+        return ask(query, account_id, db, llm, embeddings, collection)
+    except Exception:
+        # Full traceback to CloudWatch; the caller gets a short message in the usual shape.
+        logger.exception(f"Query failed: {query!r} (account {account_id})")
+        return error_response(query, "The search failed. Please try again.")
 
 
 if __name__ == "__main__":
