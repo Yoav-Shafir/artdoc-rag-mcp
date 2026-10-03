@@ -27,3 +27,6 @@ htmlcov/
 
 # CDK build output
 cdk.out/
+
+# Demo run output (uv run poe demo)
+demo_results.json

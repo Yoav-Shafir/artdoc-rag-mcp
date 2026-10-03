@@ -1,0 +1,15 @@
+{
+  "accountId": 46,
+  "queries": [
+    {"query": "Who issued the invoice for Half of You, and for how much?", "shows": "Answer with citations, from one document"},
+    {"query": "Which interior designer prepared the proposals for Dabney Lane?", "shows": "Answer pulled across many documents"},
+    {"query": "How much was paid for the Janine Abraham rattan lounge chair?", "shows": "A precise fact (a price) from a document"},
+    {"query": "Which assets were bought at a Doyle auction?", "shows": "List ranked by document content"},
+    {"query": "Which works were purchased from Gagosian?", "shows": "List by a gallery name in the text"},
+    {"query": "Which furniture pieces were bought at Christie's?", "shows": "Hybrid: SQL filter (furniture) + document search"},
+    {"query": "Which artworks have a certificate of authenticity?", "shows": "Exact document-category filter"},
+    {"query": "What does the insurance policy say about transit?", "shows": "Document category + answer"},
+    {"query": "Which works were lent to the Marc Newson exhibition at Chateau La Coste?", "shows": "Exhibition and loan documents"},
+    {"query": "Show me all paintings", "shows": "SQL filter only, no document search"}
+  ]
+}
