@@ -44,6 +44,7 @@ invokes the Lambda and passes this JSON to the UI. Built by `ask()` in
   "trace": {
     "sql_candidates": null,      // assets left after SQL filters; null = no filters used
     "chunks_searched": 312,      // document passages in scope
+    "documents_searched": 64,    // distinct files in scope (show this one to users)
     "cutoff": { "min_score": 0.2, "max_assets": 10 },   // ranked lists only, else null
     "timings_ms": { "plan": 700, "search": 150, "answer": 600, "total": 1500 }
   },

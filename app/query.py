@@ -40,7 +40,13 @@ def empty_response(query: str) -> dict:
         "query": query,
         "kind": None,
         "plan": {"filters": {}, "document_category": None, "document_query": None, "explanation": None},
-        "trace": {"sql_candidates": None, "chunks_searched": 0, "cutoff": None, "timings_ms": {}},
+        "trace": {
+            "sql_candidates": None,
+            "chunks_searched": 0,
+            "documents_searched": 0,
+            "cutoff": None,
+            "timings_ms": {},
+        },
         "answer": None,
         "citations": [],
         "assets": [],
@@ -88,8 +94,11 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
         where = {"$and": [where, {"assetId": {"$in": asset_ids}}]}
 
     search_started = time.perf_counter()
-    in_scope = len(collection.get(where=where, include=[])["ids"])
+    scope = collection.get(where=where, include=["metadatas"])["metadatas"]
+    in_scope = len(scope)
     result["trace"]["chunks_searched"] = in_scope
+    # Distinct files: what users understand ("searched 64 documents"), unlike chunk counts.
+    result["trace"]["documents_searched"] = len({meta["fileId"] for meta in scope})
 
     if query_plan.kind == "list":
         if not query_plan.document_query:
