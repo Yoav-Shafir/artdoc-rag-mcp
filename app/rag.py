@@ -83,6 +83,9 @@ def make_llm() -> ChatBedrockConverse:
         region_name=config.bedrock.llm_region,  # eu-west-1 (eu. profiles aren't in eu-west-2)
         credentials_profile_name=config.bedrock.aws_profile,
         max_tokens=config.bedrock.llm_max_tokens,  # 1024
+        # Both uses (planner, answer) have a right answer: no randomness, so the same question
+        # gets the same plan and answer. The default (meant for chat) varied the plan between runs.
+        temperature=0,
     )
 
 
