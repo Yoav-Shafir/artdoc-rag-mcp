@@ -25,11 +25,11 @@ import time
 from app.config import config
 from app.db import Database
 from app.planner import plan
-from app.rag import answer, make_collection, make_embeddings, make_llm
+from app.rag import answer, check_question, make_collection, make_embeddings, make_llm
 
 ACCOUNT_ID = 46  # mocked logged-in account
 ANSWER_CHUNKS = 3  # how many chunks the LLM sees for an 'answer' query
-EVIDENCE_PER_ASSET = 3  # passages shown under each asset of a ranked 'list'
+EVIDENCE_PER_ASSET = 3  # chunks shown under each asset of a ranked 'list'
 RESPONSE_VERSION = 1  # bump when the response shape changes (docs/RESPONSE_CONTRACT.md)
 
 
@@ -45,6 +45,7 @@ def empty_response(query: str) -> dict:
             "chunks_searched": 0,
             "documents_searched": 0,
             "cutoff": None,
+            "guardrail": None,
             "timings_ms": {},
         },
         "answer": None,
@@ -66,8 +67,19 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
     result = empty_response(query)
     timings = result["trace"]["timings_ms"]
 
+    # Safety check on the question first (Bedrock guardrail): a blocked question is never planned
+    # or searched. "skipped" when no guardrail is configured (e.g. local runs).
+    blocked = check_question(query)
+    timings["guardrail"] = elapsed_ms(started)
+    configured = bool(config.bedrock.guardrail_id and config.bedrock.guardrail_version)
+    result["trace"]["guardrail"] = "blocked" if blocked else "passed" if configured else "skipped"
+    if blocked:
+        result["error"] = blocked
+        return finish(result, started)
+
+    plan_started = time.perf_counter()
     query_plan = plan(query, llm)
-    timings["plan"] = elapsed_ms(started)
+    timings["plan"] = elapsed_ms(plan_started)
     filters = query_plan.filters.model_dump(exclude_none=True, mode="json")
     category = query_plan.document_category.value if query_plan.document_category else None
     result["kind"] = query_plan.kind
@@ -150,8 +162,8 @@ def elapsed_ms(started: float) -> int:
     return round((time.perf_counter() - started) * 1000)
 
 
-def passage(text, meta: dict, distance) -> dict:
-    """One evidence passage or citation: where it is, how well it matched, and its text."""
+def chunk_entry(text, meta: dict, distance) -> dict:
+    """One evidence chunk or citation: where it is, how well it matched, and its text."""
     return {
         "assetId": meta["assetId"],
         "fileId": meta["fileId"],
@@ -163,7 +175,7 @@ def passage(text, meta: dict, distance) -> dict:
 
 
 def group_by_asset(chunks: dict) -> list[dict]:
-    """Ranked chunks -> one entry per asset, scored by its best chunk, with its top passages.
+    """Ranked chunks -> one entry per asset, scored by its best chunk, with its top chunks.
 
     Chunks arrive best first, so each asset's first chunk is its best and sets its score.
     """
@@ -171,7 +183,7 @@ def group_by_asset(chunks: dict) -> list[dict]:
     for text, meta, distance in zip(chunks["documents"][0], chunks["metadatas"][0], chunks["distances"][0]):
         entry = assets.setdefault(meta["assetId"], {"assetId": meta["assetId"], "score": 1 - distance, "evidence": []})
         if len(entry["evidence"]) < EVIDENCE_PER_ASSET:
-            entry["evidence"].append(passage(text, meta, distance))
+            entry["evidence"].append(chunk_entry(text, meta, distance))
     return list(assets.values())
 
 
@@ -182,7 +194,7 @@ def category_assets(stored: list[dict]) -> list[dict]:
         entry = assets.setdefault(meta["assetId"], {"assetId": meta["assetId"], "score": None, "evidence": []})
         if all(item["fileId"] != meta["fileId"] for item in entry["evidence"]):
             # One entry per file (not per chunk); no text or score: the match is exact.
-            entry["evidence"].append({**passage(None, meta, None), "page": None})
+            entry["evidence"].append({**chunk_entry(None, meta, None), "page": None})
     return sorted(assets.values(), key=lambda asset: asset["assetId"])
 
 
@@ -220,7 +232,7 @@ def vector_search(collection, embeddings, text: str, where: dict, n: int) -> dic
 def to_citations(db, chunks: dict) -> list[dict]:
     """Chroma's result -> numbered citations with asset and file names, for an 'answer'."""
     citations = [
-        passage(text, meta, distance)
+        chunk_entry(text, meta, distance)
         for text, meta, distance in zip(chunks["documents"][0], chunks["metadatas"][0], chunks["distances"][0])
     ]
     asset_names = db.asset_names(list({c["assetId"] for c in citations}))

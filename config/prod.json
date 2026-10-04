@@ -14,5 +14,7 @@
   "BEDROCK_REGION": "eu-west-2",
   "BEDROCK_LLM_MODEL_ID": "eu.amazon.nova-2-lite-v1:0",
   "BEDROCK_LLM_REGION": "eu-west-1",
-  "BEDROCK_LLM_MAX_TOKENS": "1024"
+  "BEDROCK_LLM_MAX_TOKENS": "1024",
+  "BEDROCK_GUARDRAIL_ID": "4zibaxd3h7sd",
+  "BEDROCK_GUARDRAIL_VERSION": "1"
 }

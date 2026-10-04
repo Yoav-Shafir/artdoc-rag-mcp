@@ -66,6 +66,18 @@ class OverstoneRagQueryStack(Stack):
         role.add_to_policy(
             iam.PolicyStatement(actions=["bedrock:InvokeModel"], resources=BEDROCK_RESOURCES)
         )
+        if envs.get("BEDROCK_GUARDRAIL_ID"):
+            # The guardrail (in the LLM region) and its EU guardrail profile in every destination
+            # region: Standard tier routes checks across EU regions, so the region is `*`.
+            role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=["bedrock:ApplyGuardrail"],
+                    resources=[
+                        f"arn:aws:bedrock:{envs['BEDROCK_LLM_REGION']}:{self.account}:guardrail/{envs['BEDROCK_GUARDRAIL_ID']}",
+                        f"arn:aws:bedrock:*:{self.account}:guardrail-profile/eu.guardrail.v1:0",
+                    ],
+                )
+            )
         role.add_to_policy(
             iam.PolicyStatement(
                 actions=["secretsmanager:GetSecretValue"],

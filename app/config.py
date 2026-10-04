@@ -96,6 +96,10 @@ class BedrockSettings(BaseSettings):
     # profiles aren't offered in eu-west-2, so the LLM is called from eu-west-1.
     llm_region: str = "eu-west-1"
     llm_max_tokens: int = Field(default=1024, gt=0)
+    # Bedrock guardrail checked on every user question (query side only). Both empty = no check,
+    # e.g. local runs. Created in the console in llm_region; use a published version, not DRAFT.
+    guardrail_id: str | None = None
+    guardrail_version: str | None = None
 
 
 class DatabaseSettings(BaseSettings):

@@ -4,6 +4,7 @@ Kept apart from the ingestion code (pypdf, Textract, text splitting) so the quer
 Lambda only needs light dependencies: chromadb-client, langchain-aws, langchain-core.
 """
 
+import boto3
 import chromadb
 from langchain_aws import BedrockEmbeddings, ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -43,6 +44,36 @@ def make_collection():
         name=config.chroma.collection,  # overstone-assets
         configuration={"hnsw": {"space": "cosine"}},
     )
+
+
+_guardrail_client = None  # created on first use, reused by warm Lambda invocations
+
+
+def check_question(question: str) -> str | None:
+    """Run the Bedrock guardrail on a user question. Returns the blocked message, or None if allowed.
+
+    Checks the question only (source=INPUT), before planning: a blocked question never reaches
+    the LLM or the search. Not attached to the LLM calls on purpose: that would also scan the
+    document chunks sent to the answer step, and real document text could trip the
+    prompt-attack filter. Skipped when no guardrail is configured (BEDROCK_GUARDRAIL_*).
+    """
+    global _guardrail_client
+    if not (config.bedrock.guardrail_id and config.bedrock.guardrail_version):
+        return None
+    if _guardrail_client is None:
+        session = boto3.Session(profile_name=config.bedrock.aws_profile)
+        _guardrail_client = session.client("bedrock-runtime", region_name=config.bedrock.llm_region)
+    result = _guardrail_client.apply_guardrail(
+        guardrailIdentifier=config.bedrock.guardrail_id,
+        guardrailVersion=config.bedrock.guardrail_version,
+        source="INPUT",
+        content=[{"text": {"text": question}}],
+    )
+    if result["action"] != "GUARDRAIL_INTERVENED":
+        return None
+    # The guardrail's "blocked input" message, as configured in the console.
+    outputs = result.get("outputs") or [{}]
+    return outputs[0].get("text") or "This question can't be answered."
 
 
 def make_llm() -> ChatBedrockConverse:

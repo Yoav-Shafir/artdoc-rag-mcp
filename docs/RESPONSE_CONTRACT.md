@@ -43,10 +43,11 @@ invokes the Lambda and passes this JSON to the UI. Built by `ask()` in
   // How it was searched: the "details" panel.
   "trace": {
     "sql_candidates": null,      // assets left after SQL filters; null = no filters used
-    "chunks_searched": 312,      // document passages in scope
+    "chunks_searched": 312,      // document chunks in scope
     "documents_searched": 64,    // distinct files in scope (show this one to users)
     "cutoff": { "min_score": 0.2, "max_assets": 10 },   // ranked lists only, else null
-    "timings_ms": { "plan": 700, "search": 150, "answer": 600, "total": 1500 }
+    "guardrail": "passed",       // "passed" | "blocked" | "skipped" (no guardrail configured)
+    "timings_ms": { "guardrail": 200, "plan": 700, "search": 150, "answer": 600, "total": 1700 }
   },
 
   // kind = "answer"
@@ -59,7 +60,7 @@ invokes the Lambda and passes this JSON to the UI. Built by `ask()` in
       "page": 1,
       "category": "VALUATION_REPORTS",
       "score": 0.408,                  // similarity, 0..1 (higher = closer)
-      "text": "ESTHELLA PROVAS & ASSOCIATES ... INVOICE ..."   // the passage behind [1]
+      "text": "ESTHELLA PROVAS & ASSOCIATES ... INVOICE ..."   // the chunk behind [1]
     }
   ],
 
@@ -68,8 +69,8 @@ invokes the Lambda and passes this JSON to the UI. Built by `ask()` in
     {
       "rank": 1,
       "assetId": 6945, "assetName": "May 15, 2001",
-      "score": 0.603,                  // best passage's similarity; null = exact match (see below)
-      "evidence": [                    // why it matched: up to 3 passages, best first
+      "score": 0.603,                  // best chunk's similarity; null = exact match (see below)
+      "evidence": [                    // why it matched: up to 3 chunks, best first
         {
           "assetId": 6945,
           "fileId": "....pdf", "fileName": "DAMI0001 Doyle 2022.pdf",
@@ -91,7 +92,7 @@ invokes the Lambda and passes this JSON to the UI. Built by `ask()` in
 
 | List | Example | `score` | `evidence` |
 |---|---|---|---|
-| Ranked by document content | "Which assets were bought at a Doyle auction?" | 0..1 | Up to 3 passages with `text` |
+| Ranked by document content | "Which assets were bought at a Doyle auction?" | 0..1 | Up to 3 chunks with `text` |
 | Document type only | "Which artworks have a certificate of authenticity?" | `null` | One entry per file of that type; `text`, `page`, `score` are `null` (the match is the category itself) |
 | Filters only | "Show me all paintings" | `null` | `[]` (the reason is in `plan.filters`) |
 
@@ -101,9 +102,9 @@ kinds are exact and not cut, so they can be long (e.g. 153 paintings): page them
 ## Rendering notes
 
 - **Citations:** replace `[n]` in `answer` with a link or chip that opens `citations[n-1]`
-  (file name, page, category, passage).
+  (file name, page, category, chunk text).
 - **Evidence:** show a 1–2 line snippet of `evidence[0].text` under each asset, with the query
-  words highlighted; expand to all passages. The passage is a whole chunk (up to ~1000 characters),
+  words highlighted; expand to all chunks. Each is a whole chunk (up to ~1000 characters),
   so the relevant sentence is somewhere inside it.
 - **Scores:** useful as a relevance bar; don't present them as percentages or confidence.
 - **Plan panel:** `plan.explanation` plus the filters and category as chips tells the user how the
@@ -120,6 +121,7 @@ kinds are exact and not cut, so they can be long (e.g. 153 paintings): page them
 | Missing or non-string `query` | `'query' (string) is required` |
 | Missing or non-integer `accountId` | `'accountId' (integer) is required` |
 | Any failure while searching (details in CloudWatch) | `The search failed. Please try again.` |
+| Question blocked by the Bedrock guardrail (prompt attack, abusive content) | The guardrail's blocked-input message; `trace.guardrail` is `"blocked"` |
 
 A Lambda timeout or crash outside the handler still returns AWS's own `{"errorMessage": ...}`;
 the server should treat that as an error too.
