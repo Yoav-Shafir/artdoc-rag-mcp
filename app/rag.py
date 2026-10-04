@@ -2,6 +2,10 @@
 
 Kept apart from the ingestion code (pypdf, Textract, text splitting) so the query
 Lambda only needs light dependencies: chromadb-client, langchain-aws, langchain-core.
+
+Shared file: used by the Lambda, but also by the Batch ingestion job, local scripts and
+tests. Anything at the top level here runs for all of them, so heavy setup is done only
+when first needed.
 """
 
 import boto3
@@ -46,7 +50,9 @@ def make_collection():
     )
 
 
-_guardrail_client = None  # created on first use, reused by warm Lambda invocations
+# Created on first use, not when the file loads: other programs that share this file
+# (Batch job, scripts, tests) never check questions and shouldn't create it.
+_guardrail_client = None
 
 
 def check_question(question: str) -> str | None:
@@ -69,8 +75,8 @@ def check_question(question: str) -> str | None:
         source="INPUT",
         content=[{"text": {"text": question}}],
     )
-    if result["action"] != "GUARDRAIL_INTERVENED":
-        return None
+    if result["action"] != "GUARDRAIL_INTERVENED": # the guardrail did NOT step in
+        return None # nothing to block, carry on
     # The guardrail's "blocked input" message, as configured in the console.
     outputs = result.get("outputs") or [{}]
     return outputs[0].get("text") or "This question can't be answered."

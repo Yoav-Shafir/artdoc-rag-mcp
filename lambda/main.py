@@ -12,6 +12,11 @@ from Secrets Manager first, as in the other Overstone Lambdas.
 Local run (uses .env): uv run poe lambda events/ask_answer.json
 """
 
+# ==================================================================================================
+# COLD START: runs once per container, when AWS first loads this file.
+# Imports, the RDS secret, logging setup and the client cache. Warm invocations skip all of this.
+# ==================================================================================================
+
 import json
 import logging
 import os
@@ -47,12 +52,19 @@ _clients = None
 
 
 def clients() -> tuple:
+    """(Database, LLM, embeddings, Chroma collection), created once per container and reused."""
     global _clients
     if _clients is None:
         _clients = (Database(), make_llm(), make_embeddings(), make_collection())
     return _clients
 
 
+# ==================================================================================================
+# END OF COLD START. Below: runs on EVERY invocation (one call per question).
+# ==================================================================================================
+
+
+# Lambda entry point (CDK: handler="main.handler").
 def handler(event, context):
     query = (event or {}).get("query")
     account_id = (event or {}).get("accountId")
@@ -64,6 +76,9 @@ def handler(event, context):
         return error_response(query, "'accountId' (integer) is required")
 
     try:
+        # MySQL session, Bedrock LLM, Bedrock embeddings, ChromaDB collection: created by the first
+        # invocation of this container (not during the cold start, see clients()), then reused.
+        # Created here, not at module level, so a failure is caught below and retried next call.
         db, llm, embeddings, collection = clients()
         return ask(query, account_id, db, llm, embeddings, collection)
     except Exception:

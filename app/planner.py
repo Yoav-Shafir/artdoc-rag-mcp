@@ -332,6 +332,7 @@ def plan(prompt: str, llm) -> QueryPlan:
     # document_query: (string) "
     
     planner = llm.with_structured_output(QueryPlan)
+    # Send our instructions and the user's question to the AI, and get back the filled-in plan
     query_plan = planner.invoke([SystemMessage(PLANNER_PROMPT), HumanMessage(prompt)])
 
     # Drop a document_category the user didn't name (see CATEGORY_WORDS above).

@@ -36,23 +36,30 @@ RESPONSE_VERSION = 1  # bump when the response shape changes (docs/RESPONSE_CONT
 def empty_response(query: str) -> dict:
     """The response skeleton: every key the UI reads, with empty values."""
     return {
-        "version": RESPONSE_VERSION,
-        "query": query,
-        "kind": None,
-        "plan": {"filters": {}, "document_category": None, "document_query": None, "explanation": None},
-        "trace": {
-            "sql_candidates": None,
-            "chunks_searched": 0,
-            "documents_searched": 0,
-            "cutoff": None,
-            "guardrail": None,
-            "timings_ms": {},
+        "version": RESPONSE_VERSION,  # reply format version
+        "query": query,  # the user's question
+        "kind": None,  # "answer" or "list"
+        # How the question was understood
+        "plan": {
+            "filters": {},  # asset details asked for, e.g. furniture; used to filter assets in MySQL
+            "document_category": None,  # document type asked for, e.g. certificate; used to filter the document search
+            "document_query": None,  # words searched in the documents
+            "explanation": None,  # the AI's reading of the question
         },
-        "answer": None,
-        "citations": [],
-        "assets": [],
-        "total_assets": 0,
-        "error": None,
+        # How the search went
+        "trace": {
+            "sql_candidates": None,  # assets matching the details
+            "chunks_searched": 0,  # text pieces checked
+            "documents_searched": 0,  # documents checked
+            "cutoff": None,  # minimum match and maximum results
+            "guardrail": None,  # safety check result
+            "timings_ms": {},  # time per step
+        },
+        "answer": None,  # the written answer
+        "citations": [],  # sources of the answer
+        "assets": [],  # matching assets, best first
+        "total_assets": 0,  # number of assets found
+        "error": None,  # problem message, if any
     }
 
 
@@ -63,22 +70,24 @@ def error_response(query: str, message: str) -> dict:
 
 def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
     """Plan the query, search within its scope, and return a list or an answer."""
-    started = time.perf_counter()
-    result = empty_response(query)
+    started = time.perf_counter()  # start time, used to measure how long the answer takes
+    result = empty_response(query)  # blank reply, filled in step by step below
+    # Besides the total, each step gets its own time: guardrail, plan, search, answer
     timings = result["trace"]["timings_ms"]
 
     # Safety check on the question first (Bedrock guardrail): a blocked question is never planned
     # or searched. "skipped" when no guardrail is configured (e.g. local runs).
     blocked = check_question(query)
     timings["guardrail"] = elapsed_ms(started)
+
     configured = bool(config.bedrock.guardrail_id and config.bedrock.guardrail_version)
     result["trace"]["guardrail"] = "blocked" if blocked else "passed" if configured else "skipped"
     if blocked:
         result["error"] = blocked
-        return finish(result, started)
+        return finish(result, started)  # stop here: a blocked question is not searched
 
     plan_started = time.perf_counter()
-    query_plan = plan(query, llm)
+    query_plan = plan(query, llm)  # the AI works out what the question asks for and how to search
     timings["plan"] = elapsed_ms(plan_started)
     filters = query_plan.filters.model_dump(exclude_none=True, mode="json")
     category = query_plan.document_category.value if query_plan.document_category else None
@@ -97,34 +106,48 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
         where = {"$and": [where, {"category": category}]}
     asset_ids = None
     if filters:
+        # Ask MySQL for this account's assets that match the details, e.g. all its furniture
         asset_ids = db.candidate_asset_ids(account_id, query_plan.filters)
         result["trace"]["sql_candidates"] = len(asset_ids)
-        if not asset_ids:  # nothing passes the filters: nothing to search
+        if not asset_ids:  # MySQL found no matching assets, so there are no documents to search
             if query_plan.kind == "answer":
                 result["answer"] = "No assets match the filters."
-            return finish(result, started)
+            return finish(result, started)  # stop here: no assets, so no documents to search
+        # Use the asset IDs MySQL found to narrow the document search: every chunk in ChromaDB
+        # carries its asset ID, so only chunks of these assets will be searched
         where = {"$and": [where, {"assetId": {"$in": asset_ids}}]}
 
     search_started = time.perf_counter()
+    # collection.get() fetches chunks from ChromaDB by their metadata, like a database lookup:
+    # "give me every chunk where accountId is 46 and assetId is one of these".
+    # We ask for the metadata only (not the text), just to count chunks and documents.
+    # `scope` is a list of dictionaries, one dictionary per chunk, each holding that chunk's metadata, e.g.:
+    #   [
+    #       {"accountId": 46, "assetId": 6681, "fileId": "a1b2.pdf", "page": 1, "category": "PROVENANCE"},
+    #       {"accountId": 46, "assetId": 7055, "fileId": "c3d4.pdf", "page": 1, "category": "VALUATION_REPORTS"}
+    #   ]
     scope = collection.get(where=where, include=["metadatas"])["metadatas"]
     in_scope = len(scope)
     result["trace"]["chunks_searched"] = in_scope
     # Distinct files: what users understand ("searched 64 documents"), unlike chunk counts.
     result["trace"]["documents_searched"] = len({meta["fileId"] for meta in scope})
 
+    # kind is the planner's decision about what kind of reply the question needs:
+    # The user wants several assets: "Which…", "Show me all…", "Which assets have…"
     if query_plan.kind == "list":
+        # Check if we also need to search the documents' content.
         if not query_plan.document_query:
             if category:
-                # Document type only ("which assets have a certificate?"): an exact answer,
-                # the assets that have at least one chunk of that type. No scores, no cutoff;
-                # the evidence is the file of that type (the "why" is the category itself).
-                stored = collection.get(where=where, include=["metadatas"])["metadatas"]
-                assets = category_assets(stored)
+                # Only a document type was asked for, e.g. "Which assets have a certificate?".
+                # List every asset that has a document of that type. No text search needed:
+                # having the document is the answer, so there's no score.
+                assets = group_category_chunks_by_asset(scope)  # reuses the chunks already fetched above
             else:
                 # Filters only ("show me all paintings"): the SQL result is the answer.
                 assets = [{"assetId": asset_id, "score": None, "evidence": []} for asset_id in asset_ids or []]
         else:
-            # All chunks in scope, so no matching asset is cut off; then one entry per asset.
+            # Search the documents' text and rank every chunk, so no matching asset is missed.
+            # Then combine the chunks into one entry per asset, and keep only the best matches.
             chunks = vector_search(collection, embeddings, query_plan.document_query, where, in_scope)
             result["trace"]["cutoff"] = {
                 "min_score": config.retrieval.list_min_score,
@@ -187,10 +210,42 @@ def group_by_asset(chunks: dict) -> list[dict]:
     return list(assets.values())
 
 
-def category_assets(stored: list[dict]) -> list[dict]:
-    """Assets that have a document of the filtered category, with that file as evidence."""
+def group_category_chunks_by_asset(chunks: list[dict]) -> list[dict]:
+    """Turn the chunks of one document type into a list of assets, one entry per asset.
+
+    Example: for "Which artworks have a certificate of authenticity?"
+
+    Input: 3 chunks, 2 of them from the same asset and file
+        [{"assetId": 7035, "fileId": "MICU0001.pdf", "page": 1, ...},
+         {"assetId": 7035, "fileId": "MICU0001.pdf", "page": 2, ...},
+         {"assetId": 7460, "fileId": "CAOI002.pdf",  "page": 1, ...}]
+
+    Output: 2 assets, each file listed once
+        [{"assetId": 7035, "evidence": [{"fileId": "MICU0001.pdf", ...}]},
+         {"assetId": 7460, "evidence": [{"fileId": "CAOI002.pdf",  ...}]}]
+
+    How the input became the output:
+      - 3 chunks became 2 assets: asset 7035's two chunks were merged into one entry.
+      - The file is listed once: both of 7035's chunks came from MICU0001.pdf (pages 1
+        and 2 of one certificate), so it appears once in the evidence.
+      - No score, text or page: the match is exact (the asset has a certificate, full
+        stop), so there's no relevance score or matching text to show.
+      - Sorted by asset ID, since there's no "best match" order.
+
+    Example 2: one asset with two different certificate files
+      Input:
+        [{"assetId": 7035, "fileId": "MICU0001.pdf", ...},
+         {"assetId": 7035, "fileId": "MICU0002.pdf", ...}]   # a second certificate
+
+      Output: one asset, two files in its evidence
+        [{"assetId": 7035, "evidence": [{"fileId": "MICU0001.pdf", ...},
+                                        {"fileId": "MICU0002.pdf", ...}]}]
+
+    In short: chunks are merged per asset, and evidence is listed per file (never per
+    chunk or page).
+    """
     assets = {}
-    for meta in stored:
+    for meta in chunks:
         entry = assets.setdefault(meta["assetId"], {"assetId": meta["assetId"], "score": None, "evidence": []})
         if all(item["fileId"] != meta["fileId"] for item in entry["evidence"]):
             # One entry per file (not per chunk); no text or score: the match is exact.
@@ -245,7 +300,15 @@ def to_citations(db, chunks: dict) -> list[dict]:
 
 
 def main():
-    """Ask one query from the command line and print how it was handled."""
+    """Ask a question from your terminal, without the Lambda, and print the result.
+
+    Useful for testing a change on your machine before deploying. It runs the same ask()
+    the Lambda uses, with account 46 and the settings from your local .env.
+    The Lambda never calls this; it only runs when you start this file yourself.
+
+    Example:
+        uv run poe ask "Which furniture pieces were bought at Christie's?"
+    """
     query = " ".join(sys.argv[1:]) or "Who issued the invoice for Interieur?"
     db, llm = Database(), make_llm()
     embeddings, collection = make_embeddings(), make_collection()
