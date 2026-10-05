@@ -11,9 +11,12 @@ Web Platform RAG answers questions about the documents (PDFs) attached to assets
 
 Deployment: ingestion as an AWS Batch job (started manually for now), queries as a Lambda invoked by the platform server (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 
-## Active implementation plan
+## Project docs
 
-Work follows [docs/RAG_IMPLEMENTATION_PLAN.md](docs/RAG_IMPLEMENTATION_PLAN.md). At the start of any implementation session, read its "How to use this plan" section, continue from the first unchecked step in the Progress tracker, and when a step is done tick it and append to the Session log. Keep the plan updated if the approach changes. The hybrid query design is in [docs/HYBRID_QUERY_STRATEGY.md](docs/HYBRID_QUERY_STRATEGY.md).
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): what runs in AWS, how to redeploy, configuration, costs, security gaps.
+- [docs/HYBRID_QUERY_STRATEGY.md](docs/HYBRID_QUERY_STRATEGY.md): how a question is answered (plain language), known limits, planned market-sales data.
+- [docs/RESPONSE_CONTRACT.md](docs/RESPONSE_CONTRACT.md): the query response shape (keep in sync with `app/query.py`).
+- [docs/FILTER_DILEMMAS.md](docs/FILTER_DILEMMAS.md): exact filters vs similarity search, trade-offs and measured examples.
 
 ## Commands
 
@@ -54,7 +57,7 @@ Tests use pytest (`tests/unit`, `tests/integration`; integration tests need Dock
 ### Inspecting state directly
 ```bash
 curl -s http://localhost:9000/minio/health/live     # MinIO health
-curl -s http://localhost:8000/api/v1/heartbeat       # ChromaDB health
+curl -s http://localhost:8000/api/v2/heartbeat       # ChromaDB health
 docker exec -it mysql mysql -uroot -p overstone_v2   # the platform's dev MySQL (read-only for this project)
 ```
 MinIO console at http://localhost:9001 (minioadmin/minioadmin). ChromaDB has no UI, only the HTTP API (`uv run poe chroma`).
@@ -85,7 +88,7 @@ All runtime config comes from `.env` (read by pydantic-settings, which needs `py
 
 ### Infrastructure details
 
-- **Document catalog = the platform's dev MySQL** (`overstone_v2`, Docker container `mysql`, port 3306, `RDS_*` in `.env`, `config.db`). **Read-only: never write to it unless the user explicitly asks** (any such change is logged, with revert SQL, in the plan's Session log). The owning account is resolved via `file.entityId` → `asset.accountId`; files with no resolvable owner are never ingested.
+- **Document catalog = the platform's dev MySQL** (`overstone_v2`, Docker container `mysql`, port 3306, `RDS_*` in `.env`, `config.db`). **Read-only: never write to it unless the user explicitly asks** (record any such change, with revert SQL, in the commit or a doc). The owning account is resolved via `file.entityId` → `asset.accountId`; files with no resolvable owner are never ingested.
 - **S3 layout:** in the dev bucket used by ingestion (`overstone-wp-files-v2-dev`), objects are `<accountId>/<fileId>` (e.g. `46/<uuid>.pdf`), populated from production by `copy-pdfs`. `fileId` extensions may be upper case (`.PDF`).
 - MinIO runs the `quay.io/minio/aistor/minio` image, which requires a license file mounted at `/minio.license` (`minio.license` in repo root, gitignored, referenced by `compose.yaml`). Without it the container won't start. MinIO data persists in the bind-mounted `minio-data/` directory (gitignored).
 - ChromaDB data persists in a named Docker volume (`overstone-chroma-data`), not a bind mount.

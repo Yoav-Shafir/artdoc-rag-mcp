@@ -13,96 +13,46 @@ A Retrieval-Augmented Generation (RAG) project with AWS Batch ingestion and Lamb
 
 ```
 overstone-rag/
-├── app/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── query.py
-│   ├── rag.py
-│   ├── planner.py
-│   ├── batch_ingestion.py
-│   ├── happy_path.py
-│   ├── hybrid_search.py
-│   ├── eval.py
-│   ├── db/
-│   │   ├── __init__.py
-│   │   └── database.py
-│   └── storage/
-│       ├── __init__.py
-│       └── s3_storage.py
+├── app/                      # shared code (Batch job, Lambda, local scripts)
+│   ├── config.py             # settings from .env / environment
+│   ├── batch_ingestion.py    # ingestion job (AWS Batch)
+│   ├── query.py              # ask(): the query flow used by the Lambda
+│   ├── planner.py            # the LLM question planner
+│   ├── rag.py                # embeddings, ChromaDB, LLM, guardrail check, answer
+│   ├── happy_path.py         # PDF parsing + Textract OCR (used by ingestion)
+│   ├── hybrid_search.py      # older demo
+│   ├── eval.py               # evaluation script
+│   ├── db/database.py        # all MySQL queries (read-only)
+│   └── storage/s3_storage.py # S3 / MinIO client
 ├── lambda/
-│   ├── main.py
+│   ├── main.py               # Lambda entry point
 │   └── requirements.txt
-├── cdk_rag/
-│   ├── __init__.py
-│   └── rag_stack.py
-├── cdk_app.py
-├── cdk.json
-├── scripts/
-│   ├── __init__.py
-│   ├── copy_account_pdfs.py
-│   ├── show_chroma.py
-│   └── verify_services.py
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py
-│   ├── unit/
-│   │   ├── __init__.py
-│   │   └── test_config.py
-│   └── integration/
-│       ├── __init__.py
-│       ├── test_database.py
-│       ├── test_planner_values.py
-│       └── test_s3_storage.py
-├── events/
-│   ├── ask_answer.json
-│   └── ask_list.json
-├── docs/
-│   ├── RAG_IMPLEMENTATION_PLAN.md
-│   ├── DEPLOYMENT.md
-│   └── HYBRID_QUERY_STRATEGY.md
-├── config/
-│   ├── dev.json
-│   └── prod.json
-├── evals/
-│   └── questions.json
-├── compose.yaml
-├── .env
-├── .env.example
-├── pyproject.toml
-├── uv.lock
-├── minio-data/
-└── chroma.sqlite3
+├── cdk_rag/rag_stack.py      # CDK stack for the Lambda
+├── cdk_app.py, cdk.json
+├── config/dev.json, prod.json  # Lambda settings (applied by CDK)
+├── Dockerfile                # Batch job image
+├── requirements.txt, requirements-batch.txt
+├── scripts/                  # copy_account_pdfs, run_demo, show_chroma, verify_services
+├── events/                   # sample Lambda events + demo_queries.json
+├── evals/questions.json
+├── tests/                    # unit + integration tests
+├── docs/                     # DEPLOYMENT, HYBRID_QUERY_STRATEGY, RESPONSE_CONTRACT, FILTER_DILEMMAS
+├── compose.yaml              # local MinIO + ChromaDB
+├── .env.example              # all settings, documented
+└── pyproject.toml, uv.lock
 ```
 
 ## Environment Setup
 
-The project supports two environments:
+Local runs read settings from `.env` (copy `.env.example` to start).
 
-### Development (Local)
-- **MySQL:** Read from Secrets Manager (`web-platform-server-v2-dev`)
-- **S3:** MinIO (local) or AWS dev bucket (toggle in `.env`)
-- **ChromaDB:** localhost:8000
+- **MySQL:** the platform's dev database in the local `mysql` container (`RDS_*` in `.env`).
+- **S3:** local MinIO, or the AWS dev bucket (toggle in `.env`).
+- **ChromaDB:** the local container on `localhost:8000`.
 
-**To use dev:**
-```bash
-# .env is already set for dev (default)
-uv sync
-docker compose up -d
-```
-
-### Production
-- **RDS:** Read from Secrets Manager (`web-platform-server-v2`)
-- **S3:** AWS production bucket
-- **ChromaDB:** EC2 instance (10.0.30.114:8000)
-
-**To switch to prod:**
-```bash
-# Use .env.prod instead of .env
-export DOTENV_FILE=.env.prod
-# Or manually copy settings to .env
-```
-
-**For batch ingestion with prod:** Use `.env.prod` or set `AWS_SECRET_NAME=web-platform-server-v2` in your environment.
+The values used in AWS are in `config/dev.json` (Lambda) and `.env.prod`; see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#configuration). To run a script locally against production
+resources, copy the needed values from `.env.prod` into `.env` (only `.env` is read).
 
 ---
 
@@ -163,6 +113,15 @@ uv run poe ask "Who issued the invoice and on what date?"
 uv run poe ask "Show me all assets whose provenance includes Christie's"
 ```
 
+### Run the Lambda locally, or the demo questions against AWS
+
+```bash
+uv run poe lambda events/ask_answer.json   # the Lambda handler on your machine (uses .env)
+uv run poe demo                            # events/demo_queries.json against the deployed Lambda
+```
+
+The Batch job's check-only mode: `uv run python -m app.batch_ingestion --check-only`.
+
 ## Service Endpoints & Ports
 
 | Service | Endpoint | Port | Purpose |
@@ -178,25 +137,8 @@ Access the MinIO web UI at **http://localhost:9001** to view and manage S3 bucke
 
 ## Environment Variables
 
-The `.env` file contains:
-
-```bash
-# MinIO Configuration
-MINIO_ROOT_USER=overstone
-MINIO_ROOT_PASSWORD=password
-
-# S3/MinIO Client Settings
-S3_ENDPOINT_URL=http://localhost:9000
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_REGION=eu-west-2
-S3_BUCKET=overstone-rag-documents
-
-# ChromaDB Settings
-CHROMA_HOST=localhost
-CHROMA_PORT=8000
-CHROMA_COLLECTION=overstone-assets
-```
+All settings are listed and explained in `.env.example`. The values used in AWS are in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#configuration).
 
 ## Verification Commands
 
@@ -215,7 +157,7 @@ curl -s http://localhost:9000/minio/health/live
 ### 3. ChromaDB Health Check
 
 ```bash
-curl -s http://localhost:8000/api/v1/heartbeat
+curl -s http://localhost:8000/api/v2/heartbeat
 ```
 
 
@@ -253,78 +195,8 @@ docker compose down -v
 
 ## Deployment
 
-### Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           AWS Environment (eu-west-1)                       │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────────┐         Query Flow                                    │
-│  │   API Server     │                                                        │
-│  │  (Platform)      │                                                        │
-│  └────────┬─────────┘                                                        │
-│           │                                                                  │
-│           │ {"query", "accountId"}                                          │
-│           ▼                                                                  │
-│  ┌─────────────────────────────────────────────────────────────────┐        │
-│  │              Lambda: cdk-rag-query (dev/prod)                   │        │
-│  │  ┌──────────────┐   ┌──────────────────┐  ┌──────────────────┐ │        │
-│  │  │ LLM Planner  │──▶│ Candidate Filter │──▶│ Vector Search   │ │        │
-│  │  │ (Claude)     │   │    (MySQL)       │  │  (ChromaDB)      │ │        │
-│  │  └──────────────┘   └──────────────────┘  └──────────────────┘ │        │
-│  │           │                                        │             │        │
-│  │           └────────────────┬─────────────────────┘              │        │
-│  │                            │                                     │        │
-│  │                   ┌────────▼────────┐                           │        │
-│  │                   │  LLM Answer     │                           │        │
-│  │                   │  (Claude)       │                           │        │
-│  │                   └────────┬────────┘                           │        │
-│  └────────────────────────────┼───────────────────────────────────┘        │
-│                               │                                              │
-│                    Response: answer + citations                              │
-│                                                                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                        Ingestion Flow (AWS Batch Job)                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌────────────────┐   ┌──────────────┐   ┌────────────────┐                │
-│  │   AWS Batch    │──▶│   S3 Bucket  │──▶│  PDF Parser    │                │
-│  │   (1x/day)     │   │ (PDFs)       │   │  + Textract    │                │
-│  └────────────────┘   └──────────────┘   └────────┬───────┘                │
-│                                                    │                         │
-│                                                    ▼                         │
-│                                          ┌────────────────────┐             │
-│                                          │ Embed + Chunk      │             │
-│                                          │ (Bedrock Titan v2) │             │
-│                                          └────────┬───────────┘             │
-│                                                    │                         │
-│                                                    ▼                         │
-│                                          ┌────────────────────┐             │
-│                                          │    ChromaDB        │             │
-│                                          │   (EC2 Private)    │             │
-│                                          └────────────────────┘             │
-│                                                                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                      Shared Data Access & Configuration                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────┐   │
-│  │  RDS (MySQL)    │    │ Secrets Manager  │    │  Bedrock Services   │   │
-│  │  (Catalog +     │    │ (DB Credentials) │    │  - Embeddings       │   │
-│  │   Asset Data)   │    │                  │    │  - LLM (Claude)     │   │
-│  └─────────────────┘    └──────────────────┘    └─────────────────────┘   │
-│         ▲                        ▲                           ▲              │
-│         │ SELECT assets          │ GetSecretValue            │ InvokeModel  │
-│         └────────────┬───────────┴────────────┬──────────────┘             │
-│                      │                        │                             │
-│              ┌───────┴────────┐      ┌────────┴─────────┐                 │
-│              │    Lambda      │      │   Batch Job     │                 │
-│              │    (Query)     │      │   (Ingestion)   │                 │
-│              └────────────────┘      └─────────────────┘                 │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+The architecture diagram, AWS services, configuration and redeploy steps are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The steps below record how the infrastructure was first set up.
 
 ### 1. VPC & Security Group Setup
 
@@ -373,7 +245,7 @@ aws ec2 run-instances \
   --subnet-id subnet-0faf0cb3cc9d9d754 \
   --security-group-ids sg-0a0402d6ebc1b596f \
   --region eu-west-1 \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=overstone-chromadb}]'
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=wp-chromadb}]'
 ```
 
 #### Connect via Session Manager
@@ -412,7 +284,7 @@ docker run -d \
 
 # Verify it's running
 docker ps
-curl http://localhost:8000/api/v1/heartbeat
+curl http://localhost:8000/api/v2/heartbeat
 ```
 
 #### Get private IP
@@ -426,62 +298,45 @@ hostname -I
 
 ### 3. Secrets Manager: Database Credentials
 
-#### Store RDS credentials in Secrets Manager
-```bash
-aws secretsmanager create-secret \
-  --name web-platform-server-v2 \
-  --description "Overstone platform database credentials" \
-  --secret-string '{
-    "RDS_HOSTNAME": "mysql.example.com",
-    "RDS_PORT": 3306,
-    "RDS_USERNAME": "user",
-    "RDS_PASSWORD": "password",
-    "RDS_DB_NAME": "overstone_v2"
-  }' \
-  --region eu-west-1
-```
+No new secret is needed: the Lambda and the Batch job reuse the platform's existing secret
+`web-platform-server-v2` (`AWS_SECRET_NAME`), which holds `RDS_HOSTNAME`, `RDS_PORT`, `RDS_USERNAME`,
+`RDS_PASSWORD` and `RDS_DB_NAME`. **Don't create or overwrite it:** it belongs to the platform server.
 
-#### Retrieve and verify
+Check it exists (this shows its details, not the values):
 ```bash
-aws secretsmanager get-secret-value --secret-id web-platform-server-v2 --region eu-west-1
+aws secretsmanager describe-secret --secret-id web-platform-server-v2 --region eu-west-1 --profile overstone
 ```
 
 ### 4. Lambda Deployment with CDK
 
 #### Configure environment
 
-Update `config/dev.json` and `config/prod.json`:
+The Lambda's settings come from `config/dev.json` (all keys are listed in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#configuration)), for example:
 ```json
 {
   "AWS_SECRET_NAME": "web-platform-server-v2",
   "CHROMA_HOST": "10.0.30.114",
-  "CHROMA_PORT": "8000",
   "BEDROCK_REGION": "eu-west-2",
+  "BEDROCK_LLM_MODEL_ID": "eu.amazon.nova-2-lite-v1:0",
   "BEDROCK_LLM_REGION": "eu-west-1",
-  "EMBEDDINGS_MODEL": "amazon.titan-embed-text-v2:0",
-  "EMBEDDINGS_DIMENSION": "1024",
-  "LLM_MODEL": "amazon.nova-2-lite-v1:0"
+  "BEDROCK_GUARDRAIL_ID": "4zibaxd3h7sd",
+  "BEDROCK_GUARDRAIL_VERSION": "1"
 }
 ```
 
 #### Install CDK dependencies
 ```bash
-uv sync --with cdk
+uv sync --group cdk
 ```
 
-#### Synthesize CloudFormation template
+#### Deploy the Lambda
 ```bash
-uv run cdk synth
+AWS_PROFILE=overstone uv run --group cdk cdk diff OverstoneLambdaRagQueryStackDev    # see what would change
+AWS_PROFILE=overstone uv run --group cdk cdk deploy OverstoneLambdaRagQueryStackDev  # deploy
 ```
-
-#### Deploy Lambda stacks
-```bash
-# Deploy dev stack
-uv run cdk deploy OverstoneLambdaRagQueryStackDev --region eu-west-1
-
-# Deploy prod stack
-uv run cdk deploy OverstoneLambdaRagQueryStackProd --region eu-west-1
-```
+A prod stack (`OverstoneLambdaRagQueryStackProd`) is defined but not deployed; the platform server uses the
+dev Lambda.
 
 #### Verify Lambda was created
 ```bash
@@ -583,24 +438,6 @@ uv sync
 ### MinIO License Error
 
 The project uses MinIO's AIStore image which requires a license file (`minio.license`). Ensure the file exists in the project root.
-
-## Architecture
-
-```
-┌─────────────────────────────────────┐
-│      Python Application             │
-│      (main.py)                      │
-└────────────┬────────────────────────┘
-             │
-    ┌────────┴────────┐
-    │                 │
-    v                 v
-┌─────────────┐  ┌──────────────┐
-│   MinIO     │  │  ChromaDB    │
-│ (S3 compat) │  │  (Vector DB) │
-│ :9000-9001  │  │   :8000      │
-└─────────────┘  └──────────────┘
-```
 
 ## Links
 
