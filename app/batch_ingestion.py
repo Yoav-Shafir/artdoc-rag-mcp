@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # Pilot: only this account is ingested. Set to None to ingest every account.
-PILOT_ACCOUNT_ID = 46
+PILOT_ACCOUNT_ID = 9
 # Demo runs: process at most this many files per category. Set to None for no limit.
 MAX_FILES_PER_CATEGORY = 10
 
