@@ -49,7 +49,7 @@ def stored_metadata(collection, account_id: int) -> dict[str, tuple]:
     """fileId -> (assetId, category) of the files that already have chunks for this account."""
     stored = collection.get(where={"accountId": account_id}, include=["metadatas"])
     return {
-        meta["fileId"]: (meta["assetId"], meta.get("category"))  # older chunks have no category
+        meta["fileId"]: (meta["assetId"], meta.get("category"))  # early in the project, chunks were stored without a category in their metadata
         for meta in stored["metadatas"]
     }
 
@@ -99,6 +99,9 @@ def ingest_account(account_id: int, bucket: str, db, storage, splitter, embeddin
     """Ingest an account's new PDFs, then remove chunks of deleted files."""
     counts = {"ingested": 0, "unchanged": 0, "failed": 0, "deleted": 0}
     files = db.files_for_account(account_id)  # PDFs only, image categories excluded
+    # Files already in ChromaDB for this account: fileId -> (assetId, category), e.g.
+    #   {"3f1c9a2e-8d4b-4c61-9a7e-2b5f0c9d1e3a.pdf": (7035, "CERTIFICATE_OF_AUTHENTICITY")}
+    # Used below to skip files that are done, and to find files deleted from the platform.
     stored = stored_metadata(collection, account_id)
 
     # The limit applies to processing only; the deletion check below still uses every file.
@@ -164,12 +167,12 @@ def main():
     """Run ingestion or check S3. Use --check-only flag to just verify files without ingesting."""
     import sys
 
-    check_only = "--check-only" in sys.argv
+    check_only = "--check-only" in sys.argv  # True: only check files exist in S3, ingest nothing
     db = Database()  # read-only access to the platform's MySQL
-    storage = S3Storage()
+    storage = S3Storage()  # S3 client: downloads the PDFs
     bucket = config.s3.bucket  # S3_BUCKET from .env: where the PDFs are read from
 
-    account_ids = db.list_account_ids(PILOT_ACCOUNT_ID)
+    account_ids = db.list_account_ids(PILOT_ACCOUNT_ID)  # accounts to process: just the pilot one for now
     logger.info(f"{'Checking' if check_only else 'Ingesting'} {len(account_ids)} account(s): {account_ids}")
 
     if check_only:
@@ -177,6 +180,7 @@ def main():
             check_s3(account_id, bucket, db, storage)
         return
 
+    # Text splitter: cuts each PDF's text into chunks of ~1000 characters, overlapping by 150
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=config.chunking.size,  # 1000
         chunk_overlap=config.chunking.overlap,  # 150
@@ -186,6 +190,7 @@ def main():
     textract = make_textract()  # boto3 Textract client: AWS OCR service for scanned PDFs
 
     for account_id in account_ids:
+        # Ingest the account's PDFs; counts = how many were ingested, skipped, failed, deleted
         counts = ingest_account(account_id, bucket, db, storage, splitter, embeddings, collection, textract)
         logger.info(f"Account {account_id}: {counts}")
 

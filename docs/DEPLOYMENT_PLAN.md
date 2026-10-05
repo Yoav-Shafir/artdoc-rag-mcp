@@ -2,252 +2,232 @@
 
 ## Architecture Overview
 
-A hybrid deployment with periodic ingestion (AWS Batch) and on-demand search (AWS Lambda).
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ AWS Environment                                                 │
+│ AWS Environment (eu-west-1, private VPC)                        │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  ┌──────────────────────┐          ┌──────────────────────┐    │
-│  │   AWS Batch Job      │          │   AWS Lambda         │    │
-│  │  (Ingestion)         │          │  (Search & Answer)   │    │
-│  │  • Fetch PDFs        │          │  • Embed query       │    │
-│  │  • Parse + OCR       │          │  • Search ChromaDB   │    │
-│  │  • Chunk + Embed     │          │  • Call Bedrock LLM  │    │
-│  │  • Store in ChromaDB │          │  • Return results    │    │
-│  └──────────────────────┘          └──────────────────────┘    │
+│  ┌──────────────────────┐          ┌──────────────────────┐     │
+│  │   AWS Batch Job      │          │   AWS Lambda         │     │
+│  │  (Ingestion)         │          │  (Search & Answer)   │     │
+│  │  • Fetch PDFs (S3)   │          │  • Safety check      │     │
+│  │  • Parse + OCR       │          │  • Plan the question │     │
+│  │  • Chunk + Embed     │          │  • SQL filters       │     │
+│  │  • Store in ChromaDB │          │  • Search ChromaDB   │     │
+│  │                      │          │  • Answer or list    │     │
+│  └──────────────────────┘          └──────────────────────┘     │
 │          │                                    │                 │
 │          └────────────────┬───────────────────┘                 │
 │                           │                                     │
 │          ┌────────────────┴────────────────┐                    │
 │          │   Shared Services               │                    │
 │          ├─────────────────────────────────┤                    │
-│          │ • S3 (PDFs)                     │                    │
 │          │ • RDS MySQL (file catalog)      │                    │
-│          │ • ChromaDB (vector store)       │                    │
-│          │ • AWS Bedrock (embeddings+LLM)  │                    │
+│          │ • ChromaDB on EC2 (vectors)     │                    │
+│          │ • Bedrock (embeddings + LLM)    │                    │
+│          │ • Secrets Manager (DB login)    │                    │
+│          ├─────────────────────────────────┤                    │
+│          │ Batch only: S3 (PDFs), Textract │                    │
+│          │ Lambda only: Bedrock Guardrails │                    │
 │          └─────────────────────────────────┘                    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
-
-Server Application
-      │
-      └──► Invoke Lambda (with query) ──► Response (answer + citations)
 ```
 
 ## AWS Services
 
 | Service | Component | Purpose |
 |---------|-----------|---------|
-| **AWS Batch** | Ingestion Job | Periodic PDF download, parse, chunk, embed, store |
-| **AWS Lambda** | Search Function | On-demand query processing and answer generation |
-| **S3** | Storage | PDF files (input), optionally model artifacts |
-| **RDS MySQL** | Database | File catalog, asset metadata, ownership (read-only in Batch+Lambda) |
-| **ChromaDB** | Vector Store | Chunk embeddings and metadata (managed or self-hosted) |
-| **AWS Bedrock** | LLM + Embeddings | Titan v2 embeddings, Nova 2 Lite LLM |
-| **CloudWatch** | Logging | Job and Lambda logs |
-| **EventBridge** (optional) | Scheduler | Trigger Batch job on a schedule or S3 event |
+| **AWS Batch (Fargate)** | Ingestion job | Download, parse, chunk, embed and store PDFs; run manually for now |
+| **ECR** | `overstone-batch-ingestion` | Docker image for the Batch job |
+| **AWS Lambda** | `cdk-rag-query-dev` | On-demand questions: safety check, plan, search, answer or list |
+| **CDK / CloudFormation** | `OverstoneLambdaRagQueryStackDev` | Deploys the Lambda and its IAM role |
+| **S3** | `overstone-wp-files-prod-sse` | Source PDFs (read by Batch only) |
+| **Textract** | OCR | Text from scanned pages during ingestion |
+| **RDS MySQL** | `overstone_v2` | File catalogue and asset details (read-only) |
+| **EC2** | `wp-chromadb` (t3.small, 30GB) | Hosts ChromaDB |
+| **ChromaDB** | `overstone-assets` collection | Chunks, embeddings and their metadata |
+| **Bedrock** | Titan v2, Nova 2 Lite | Embeddings, and the planner and answer LLM |
+| **Bedrock Guardrails** | `4zibaxd3h7sd` v1 | Blocks prompt attacks and abusive questions |
+| **Secrets Manager** | `web-platform-server-v2` | Database credentials |
+| **IAM** | Batch job and execution roles, Lambda role | Permissions for each component |
+| **VPC** | Private subnets, security group, NAT | Private access to ChromaDB and RDS, and outbound access to AWS services |
+| **CloudWatch** | Logs | Batch job and Lambda logs |
+| **EventBridge** | (not set up yet) | Future: run the Batch job on a schedule |
 
 ## Data Flow
 
-### Ingestion (AWS Batch)
+### Ingestion (AWS Batch): `app/batch_ingestion.py`
 
-1. **Trigger:** Scheduled (cron) or S3 event (new PDF uploaded)
-2. **Job runs:**
-   - Connect to RDS MySQL (read-only): list files and ownership
-   - Connect to S3: download PDFs
-   - Parse with pypdf, OCR with Textract for scans
-   - Chunk with RecursiveCharacterTextSplitter
-   - Embed with Bedrock Titan v2
-   - Upsert into ChromaDB
-3. **Output:** Chunks in ChromaDB with metadata (accountId, assetId, fileId, page)
+1. **Trigger:** manual for now: submit a job in the Batch console (no schedule yet).
+   - `["python", "-m", "app.batch_ingestion", "--check-only"]`: only counts the account's PDFs per document type and checks they exist in S3.
+   - `["python", "-m", "app.batch_ingestion"]`: the real ingestion.
+2. **Start-up:** reads the database login from Secrets Manager, then connects to MySQL, S3, Bedrock, ChromaDB and Textract.
+3. **Per account** (only the pilot account for now, `PILOT_ACCOUNT_ID`):
+   - **MySQL:** get the list of the account's PDF files (images and deleted assets are left out).
+   - **ChromaDB:** get the list of files that were already ingested in earlier runs.
+   - **Demo limit:** at most `MAX_FILES_PER_CATEGORY` (10) files per document type.
+   - **Skip** files that were already ingested, so each file is only processed once.
+4. **Per file:**
+   - **Download** from S3 (prod: key = `fileId`, flat bucket).
+   - **Read the text** with pypdf; pages with no text are turned into images and read by **Textract** (OCR).
+   - **Cut into chunks** of ~1,000 characters, overlapping by 150.
+   - **Embed** each chunk with Bedrock Titan v2 (1,024 numbers).
+   - **Save** to ChromaDB, replacing any old chunks of the file.
+   - A file missing in S3 is logged and skipped; any other error is logged in full, and the job carries on.
+5. **Clean-up:** chunks of files no longer in MySQL (deleted on the platform) are removed.
+6. **Output:** chunks in ChromaDB with metadata `accountId`, `assetId`, `fileId`, `page`, `category`; the log ends with counts, e.g. `{'ingested': 13, 'unchanged': 0, 'failed': 0, 'deleted': 0}`.
 
-### Search (AWS Lambda)
+### Search (AWS Lambda): `lambda/main.py` → `app/query.py`
 
-1. **Input:** User query from server application
-2. **Function runs:**
-   - Embed query with Bedrock Titan v2
-   - Search ChromaDB for top-k chunks (tenant-filtered)
-   - Optionally: run planner for SQL filters + ranked search
-   - Call Bedrock Nova 2 Lite LLM to generate answer with citations
-3. **Output:** Answer with source citations, metadata
+1. **Input:** the user's question and account, sent by the platform server: `{"query": "...", "accountId": 46}`. For safety, the server decides the account, not the user.
+2. **Safety check:** Bedrock Guardrails checks the question; a blocked question stops here.
+3. **Plan:** the LLM (Nova 2 Lite, temperature 0) reads the question and returns:
+   - `kind`: should the reply be a written answer or a list of assets?
+   - `filters`: which assets, e.g. paintings or furniture (searched in MySQL)
+   - `document_category`: which type of document, e.g. certificates (only if the question says so)
+   - `document_query`: what to look for inside the documents, e.g. "bought at Christie's"
+4. **Scope:** the search is limited to the account, plus the document type if one was asked for, plus the assets MySQL matched if there are filters.
+5. **Search and reply:** one of four ways, depending on the plan:
+   - **"Which assets have a certificate?"** → every asset that has that type of document.
+   - **"Show me all paintings"** → the assets MySQL found.
+   - **"Which assets were bought at Christie's?"** → search the documents' text and return the 10 best matching assets.
+   - **"Who issued the invoice?"** → the 3 best matching pieces of text go to the LLM, which writes an answer with sources [1], [2]…
+6. **Output:** the response contract v1 ([RESPONSE_CONTRACT.md](RESPONSE_CONTRACT.md)): the plan, timings, answer and citations or ranked assets with matching text, and an error if any. Asset and file names are looked up in MySQL.
 
-## Deployment Steps
+## How It's Deployed and How to Redeploy
 
-### Phase 1: Infrastructure Setup
+### 1. One-time setup (done)
 
-1. **RDS MySQL**
-   - Ensure the existing `overstone_v2` database is accessible from AWS
-   - Configure security group to allow access from Batch and Lambda
-   - Keep credentials in AWS Secrets Manager
+| Part | What exists |
+|------|-------------|
+| **Database** | The platform's RDS MySQL `overstone_v2`, read-only. Login from the existing secret `web-platform-server-v2`. |
+| **PDFs** | Prod S3 bucket `overstone-wp-files-prod-sse` (flat: key = `fileId`). Read by Batch only. |
+| **ChromaDB** | EC2 `wp-chromadb` (t3.small, 30GB disk), private IP `10.0.30.114`, port 8000. |
+| **Batch** | Fargate compute environment and job queue (set up in the console). Job definition `wp-batch-ingestion-check-prod` (2 vCPU, 4GB), settings as environment variables in the definition. |
+| **Batch roles** | Execution role `wp-batch-execution-role` (pull the image, write logs). Job role (S3, Bedrock, Textract, Secrets Manager). Without the job role, the container has no AWS access. |
+| **Image** | ECR repository `overstone-batch-ingestion`, tag `latest`. |
+| **Lambda** | `cdk-rag-query-dev` (1,024MB, 60s timeout), deployed with CDK; its role and settings come from the stack and `config/dev.json`. |
+| **Guardrail** | Bedrock Guardrail `4zibaxd3h7sd` version 1 (Standard tier, EU profile). |
 
-2. **S3**
-   - S3 bucket for PDF files (already in use locally)
-   - Ensure IAM roles for Batch and Lambda can read from it
+### 2. Update the Batch job
 
-3. **ChromaDB**
-   - Option A: **Self-hosted** on EC2 with persistent volume
-     - Run ChromaDB HTTP server on private EC2 instance
-     - Configure security group for Batch/Lambda access
-   - Option B: **Managed ChromaDB** (if available in your region)
-   - Connection details stored in Secrets Manager
+After changing ingestion code:
 
-4. **IAM Roles and Policies**
-   - **Batch Execution Role:** S3 (read), RDS (read), ChromaDB (read+write), Bedrock (invoke), Secrets Manager (read)
-   - **Lambda Execution Role:** RDS (read), ChromaDB (read+write), Bedrock (invoke), Secrets Manager (read), CloudWatch (write logs)
+```bash
+# Log in to ECR (lasts 12 hours)
+aws ecr get-login-password --region eu-west-1 --profile overstone \
+  | docker login --username AWS --password-stdin 555547688340.dkr.ecr.eu-west-1.amazonaws.com
 
-5. **Secrets Manager**
-   - `rds-credentials`: RDS_HOSTNAME, RDS_PORT, RDS_USERNAME, RDS_PASSWORD, RDS_DB_NAME
-   - `bedrock-config`: AWS_PROFILE (or omit if using IAM role), BEDROCK_REGION
-   - `chroma-config`: CHROMA_HOST, CHROMA_PORT
+# Build, tag and push the image
+docker build -t overstone-batch-ingestion .
+docker tag overstone-batch-ingestion:latest 555547688340.dkr.ecr.eu-west-1.amazonaws.com/overstone-batch-ingestion:latest
+docker push 555547688340.dkr.ecr.eu-west-1.amazonaws.com/overstone-batch-ingestion:latest
+```
 
-### Phase 2: Docker Image for Batch
+Then in the Batch console, **Create new job** (job definition `wp-batch-ingestion-check-prod`) with a command override:
+1. `["python", "-m", "app.batch_ingestion", "--check-only"]`: check the account's files first.
+2. `["python", "-m", "app.batch_ingestion"]`: the real ingestion.
 
-1. **Dockerfile**
-   - Base: Python 3.12
-   - Copy app/ and dependencies
-   - Copy `.env.example` → `.env` (or read from Secrets at runtime)
-   - Entry point: `python -m app.happy_path`
+Logs: the job's log stream in CloudWatch (`/aws/batch/job`). The account is set in code (`PILOT_ACCOUNT_ID` in `app/batch_ingestion.py`).
 
-2. **ECR Repository**
-   - Create AWS ECR repo: `web-platform-rag-ingestion`
-   - Build and push Docker image
+### 3. Update the Lambda
 
-3. **Batch Job Definition**
-   - Image: ECR image
-   - vCPU: 2
-   - Memory: 4 GB
-   - Environment: inject Secrets Manager values
-   - Timeout: 3600 seconds (adjust based on PDF count)
+After changing query code (`app/` or `lambda/`):
 
-4. **Batch Job Queue & Compute Environment**
-   - Compute environment: EC2 or Fargate
-   - Job queue: standard priority
+```bash
+AWS_PROFILE=overstone uv run --group cdk cdk diff OverstoneLambdaRagQueryStackDev    # see what would change
+AWS_PROFILE=overstone uv run --group cdk cdk deploy OverstoneLambdaRagQueryStackDev  # deploy
+uv run poe demo                                                                       # check the demo questions
+```
 
-### Phase 3: Lambda Function for Search
+Logs: CloudWatch `/aws/lambda/cdk-rag-query-dev`.
 
-1. **Lambda Handler** (`lambda_handler.py`)
-   - Input: `{"query": "...", "account_id": 46, "n_results": 3}`
-   - Initialize: embeddings, ChromaDB client, LLM
-   - Run search/answer pipeline
-   - Output: `{"answer": "...", "hits": [...]}`
+### 4. Not done yet
 
-2. **Package and Deploy**
-   - Create Lambda layer for dependencies (or bundle all in zip)
-   - Upload to AWS Lambda
-   - Set timeout: 60 seconds (adjust for LLM latency)
-   - Allocate memory: 512 MB (Bedrock calls are fast)
-
-3. **Environment Variables**
-   - `RDS_*`, `CHROMA_*`, `BEDROCK_*` from Secrets Manager
-   - Or passed by server at invocation
-
-### Phase 4: Scheduling and Monitoring
-
-1. **EventBridge Rule** (optional)
-   - Trigger Batch job on schedule (e.g., daily 2 AM)
-   - Or: S3 event trigger when PDF uploaded
-
-2. **CloudWatch**
-   - Batch job logs: `/aws/batch/job/web-platform-rag-ingestion`
-   - Lambda logs: `/aws/lambda/web-platform-rag-search`
-   - Set up alarms for failures
-
-3. **Testing**
-   - Run Batch job manually to verify ingestion
-   - Test Lambda invocation from CLI: `aws lambda invoke --function-name web-platform-rag-search`
+- **Daily schedule:** an EventBridge rule to run the Batch job automatically (today it's started by hand).
+- **Alarms:** CloudWatch alarms on Batch failures and Lambda errors.
+- **Prod Lambda:** a separate `cdk-rag-query-prod` stack exists in CDK but isn't deployed; the platform server uses the dev Lambda.
 
 ## Configuration
 
-### Environment Variables (in AWS Secrets or Lambda env)
+### Where settings come from
 
-```env
-# RDS
-RDS_HOSTNAME=<rds-endpoint>
-RDS_PORT=3306
-RDS_USERNAME=<username>
-RDS_PASSWORD=<password>
-RDS_DB_NAME=overstone_v2
+| Part | Source |
+|------|--------|
+| **Lambda** | [config/dev.json](../config/dev.json), set as the Lambda's environment variables by CDK |
+| **Batch job** | Environment variables in the job definition (`wp-batch-ingestion-check-prod`) |
+| **Local runs** | `.env` (template: `.env.example`) |
+| **Database login** | Always the secret named in `AWS_SECRET_NAME` (`web-platform-server-v2`), read at start-up |
 
-# S3
-S3_ENDPOINT_URL=https://s3.amazonaws.com
-S3_REGION=us-east-1
-S3_BUCKET=<your-bucket>
-S3_ACCESS_KEY=<key>
-S3_SECRET_KEY=<secret>
+Anything not set uses the default in [app/config.py](../app/config.py). In AWS, access comes from IAM roles: no AWS keys or `AWS_PROFILE`.
 
-# ChromaDB
-CHROMA_HOST=<ec2-private-ip or managed-endpoint>
-CHROMA_PORT=8000
-CHROMA_COLLECTION=overstone-assets
+### Variables
 
-# Bedrock
-BEDROCK_REGION=eu-west-2
-BEDROCK_LLM_REGION=eu-west-2
-AWS_PROFILE=default (or omit; use IAM role)
-BEDROCK_LLM_MODEL_ID=us.anthropic.claude-3-5-sonnet-20241022
-BEDROCK_LLM_MAX_TOKENS=1024
+| Variable | Value in AWS | Used by | Notes |
+|----------|--------------|---------|-------|
+| `AWS_SECRET_NAME` | `web-platform-server-v2` | Batch, Lambda | Secret holding `RDS_HOSTNAME`, `RDS_USERNAME`, `RDS_PASSWORD` |
+| `RDS_PORT` | `3306` | Batch, Lambda | |
+| `RDS_DB_NAME` | `overstone_v2` | Batch, Lambda | |
+| `S3_BUCKET` | `overstone-wp-files-prod-sse` | Batch | Where the PDFs are |
+| `S3_REGION` | `eu-west-1` | Batch | |
+| `S3_ACCOUNT_FOLDERS` | `false` | Batch | Prod bucket is flat (key = `fileId`); dev bucket uses `<accountId>/<fileId>` |
+| `S3_ENDPOINT_URL` | (empty) | Batch | Set only for local MinIO |
+| `CHROMA_HOST` | `10.0.30.114` | Batch, Lambda | EC2 `wp-chromadb` |
+| `CHROMA_PORT` | `8000` | Batch, Lambda | |
+| `CHROMA_COLLECTION` | `overstone-assets` | Batch, Lambda | |
+| `EMBEDDINGS_MODEL` | `amazon.titan-embed-text-v2:0` | Batch, Lambda | |
+| `EMBEDDINGS_DIMENSION` | `1024` | Batch, Lambda | |
+| `BEDROCK_REGION` | `eu-west-2` | Batch, Lambda | Region for embeddings |
+| `BEDROCK_LLM_MODEL_ID` | `eu.amazon.nova-2-lite-v1:0` | Lambda | Planner and answers (EU cross-region profile) |
+| `BEDROCK_LLM_REGION` | `eu-west-1` | Lambda | Also where the guardrail lives |
+| `BEDROCK_LLM_MAX_TOKENS` | `1024` | Lambda | |
+| `BEDROCK_GUARDRAIL_ID` | `4zibaxd3h7sd` | Lambda | Empty = no safety check |
+| `BEDROCK_GUARDRAIL_VERSION` | `1` | Lambda | |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1000` / `150` (defaults) | Batch | |
+| `RETRIEVAL_LIST_MIN_SCORE` | `0.2` (default) | Lambda | Lowest score kept in ranked lists |
+| `RETRIEVAL_LIST_MAX_ASSETS` | `10` (default) | Lambda | Most assets in a ranked list |
 
-# Embeddings
-EMBEDDINGS_MODEL=amazon.titan-embed-text-v2:0
-EMBEDDINGS_DIMENSION=1024
-
-# Chunking
-CHUNK_SIZE=1000
-CHUNK_OVERLAP=150
-```
+Local only: `AWS_PROFILE` (e.g. `overstone`), `S3_ENDPOINT_URL` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` for MinIO, and `RDS_*` directly in `.env` instead of the secret.
 
 ## Cost Estimates (rough, monthly)
 
+Assumes 100 questions a day and one ingestion run a day that only processes new files.
+
 | Service | Usage | Cost |
 |---------|-------|------|
-| **AWS Batch** | 1 job/day, 10 min, 2 vCPU | $5–15 |
-| **Lambda** | 1000 invocations/day, 10 sec avg | $2–5 |
-| **RDS MySQL** | db.t3.micro (existing) | $20–30 |
-| **ChromaDB (EC2)** | t3.small 24/7 | $15–20 |
-| **S3** | 100 GB storage, minimal requests | $2–3 |
-| **Bedrock** | 1000 queries/day (embeddings+LLM) | $50–100 |
-| **CloudWatch** | Logs, alarms | $5–10 |
-| **Total** | | **~$100–180** |
+| **AWS Batch (Fargate)** | 1 job/day, ~10 min, 2 vCPU, 4GB | < $1 |
+| **Textract** | OCR for new scanned pages only | < $1 |
+| **Lambda** | 100 questions/day (~3,000/month), ~1.5s, 1GB | < $1 |
+| **Bedrock** | 100 questions/day: planner + answer (Nova 2 Lite), embeddings, guardrail check | $5–10 |
+| **ChromaDB (EC2)** | t3.small 24/7 + 30GB disk (measured) | ~$19 |
+| **CloudWatch** | Batch and Lambda logs | $1–3 |
+| **RDS MySQL** | existing platform database (not new cost) | ($20–30) |
+| **S3** | existing platform bucket (not new cost) | ($2–3) |
+| **Total** | | **~$50–70**, of which **~$30 is new** for this project |
 
-(Costs vary by region and workload; use AWS Pricing Calculator for accuracy)
+Not included: the NAT gateway (already used by other systems), and the one-off first ingestion of an account (about $1–3 per 1,000 files, mostly Textract).
+
+(Prices are list prices for eu-west-1/eu-west-2 and may change; use the AWS Pricing Calculator for accuracy.)
 
 ## Security Considerations
 
-1. **IAM Roles:** Principle of least privilege
-   - Batch and Lambda get minimal permissions (no admin)
-   - S3 read-only, RDS read-only, ChromaDB scoped to specific ops
+### In place
 
-2. **Secrets Management**
-   - Store credentials in AWS Secrets Manager, not in code or `.env`
-   - Rotate credentials periodically
+- **Each account only sees its own documents:** every search is filtered by `accountId`, and the platform server decides the account (never the browser).
+- **Safety check on every question:** Bedrock Guardrails blocks prompt attacks and abusive questions before anything is searched.
+- **No AWS keys:** Batch, Lambda and the server use IAM roles.
+- **Private network:** ChromaDB and RDS are only reachable inside the VPC.
+- **Database login in Secrets Manager**, not in code or the image.
 
-3. **Network**
-   - RDS and ChromaDB in private subnets
-   - Batch and Lambda access via security group rules
-   - S3 bucket policy restricts to AWS account
+### Known gaps and next steps
 
-4. **Logging**
-   - CloudWatch logs contain queries and results (may include PII)
-   - Set retention policy (e.g., 30 days)
-   - Encrypt logs at rest
-
-## Future Improvements
-
-1. **Caching:** Redis or CloudFront for frequently asked questions
-2. **Autoscaling:** Lambda concurrent execution limits; Batch spot instances
-3. **Multi-region:** Replicate ChromaDB for low-latency access
-4. **Monitoring:** Custom metrics (query latency, chunk quality, cost per query)
-5. **A/B Testing:** Run multiple LLM models, compare answer quality
-6. **Sales-table tool:** Add RDS read access to `sales` table for market queries
-
-## Rollback and Disaster Recovery
-
-1. **Batch Job:** Can safely re-run; upsert is idempotent
-2. **Lambda:** Versioning and aliases allow quick rollback
-3. **ChromaDB:** Backup before large ingestion; snapshots on EC2
-4. **RDS:** Automated backups (existing)
+1. **Bank details can appear in answers:** the guardrail's sensitive-information filter is off (for the demo). When enabled, it masks only the written answer; the citation text shown in the UI comes straight from ChromaDB and also needs masking.
+2. **The Lambda trusts the account it is given:** anyone allowed to invoke it can read any account. Keep invoke permission narrow; the platform server's Elastic Beanstalk role currently has `AWSLambda_FullAccess` (it can also change or delete any Lambda).
+3. **"Read-only" database access is by convention only:** the RAG code reuses the platform server's database login, which can write. A dedicated read-only database user would enforce it. Rotating that login also affects the platform server.
+4. **ChromaDB has no login:** anything inside the VPC that reaches `10.0.30.114:8000` can read or delete the stored documents. It's protected only by the network (security group).
+5. **Questions are stored in logs:** the server logs each question sent to the Lambda and forwards logs to Datadog; errors go to CloudWatch. Set retention and decide what to redact.
+6. **Data is processed across EU regions, not only the UK:** the LLM and the guardrail use EU cross-region routing. Confirm this is acceptable for client contracts (to be covered in the planned privacy/GDPR document).
 
 ## Monitoring Checklist
 

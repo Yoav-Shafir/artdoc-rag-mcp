@@ -122,9 +122,10 @@ def ask(query: str, account_id: int, db, llm, embeddings, collection) -> dict:
     # "give me every chunk where accountId is 46 and assetId is one of these".
     # We ask for the metadata only (not the text), just to count chunks and documents.
     # `scope` is a list of dictionaries, one dictionary per chunk, each holding that chunk's metadata, e.g.:
+    # (fileIds are UUIDs, shortened here)
     #   [
-    #       {"accountId": 46, "assetId": 6681, "fileId": "a1b2.pdf", "page": 1, "category": "PROVENANCE"},
-    #       {"accountId": 46, "assetId": 7055, "fileId": "c3d4.pdf", "page": 1, "category": "VALUATION_REPORTS"}
+    #       {"accountId": 46, "assetId": 6681, "fileId": "0e89a21d-….pdf", "page": 1, "category": "PROVENANCE"},
+    #       {"accountId": 46, "assetId": 7055, "fileId": "62f4b8c1-….pdf", "page": 1, "category": "VALUATION_REPORTS"}
     #   ]
     scope = collection.get(where=where, include=["metadatas"])["metadatas"]
     in_scope = len(scope)
@@ -214,19 +215,20 @@ def group_category_chunks_by_asset(chunks: list[dict]) -> list[dict]:
     """Turn the chunks of one document type into a list of assets, one entry per asset.
 
     Example: for "Which artworks have a certificate of authenticity?"
+    (fileIds are the platform's file UUIDs, shortened here)
 
     Input: 3 chunks, 2 of them from the same asset and file
-        [{"assetId": 7035, "fileId": "MICU0001.pdf", "page": 1, ...},
-         {"assetId": 7035, "fileId": "MICU0001.pdf", "page": 2, ...},
-         {"assetId": 7460, "fileId": "CAOI002.pdf",  "page": 1, ...}]
+        [{"assetId": 7035, "fileId": "3f1c9a2e-….pdf", "page": 1, ...},
+         {"assetId": 7035, "fileId": "3f1c9a2e-….pdf", "page": 2, ...},
+         {"assetId": 7460, "fileId": "8b7d4e10-….pdf", "page": 1, ...}]
 
     Output: 2 assets, each file listed once
-        [{"assetId": 7035, "evidence": [{"fileId": "MICU0001.pdf", ...}]},
-         {"assetId": 7460, "evidence": [{"fileId": "CAOI002.pdf",  ...}]}]
+        [{"assetId": 7035, "evidence": [{"fileId": "3f1c9a2e-….pdf", ...}]},
+         {"assetId": 7460, "evidence": [{"fileId": "8b7d4e10-….pdf", ...}]}]
 
     How the input became the output:
       - 3 chunks became 2 assets: asset 7035's two chunks were merged into one entry.
-      - The file is listed once: both of 7035's chunks came from MICU0001.pdf (pages 1
+      - The file is listed once: both of 7035's chunks came from the same file (pages 1
         and 2 of one certificate), so it appears once in the evidence.
       - No score, text or page: the match is exact (the asset has a certificate, full
         stop), so there's no relevance score or matching text to show.
@@ -234,12 +236,12 @@ def group_category_chunks_by_asset(chunks: list[dict]) -> list[dict]:
 
     Example 2: one asset with two different certificate files
       Input:
-        [{"assetId": 7035, "fileId": "MICU0001.pdf", ...},
-         {"assetId": 7035, "fileId": "MICU0002.pdf", ...}]   # a second certificate
+        [{"assetId": 7035, "fileId": "3f1c9a2e-….pdf", ...},
+         {"assetId": 7035, "fileId": "c52e7f93-….pdf", ...}]   # a second certificate
 
       Output: one asset, two files in its evidence
-        [{"assetId": 7035, "evidence": [{"fileId": "MICU0001.pdf", ...},
-                                        {"fileId": "MICU0002.pdf", ...}]}]
+        [{"assetId": 7035, "evidence": [{"fileId": "3f1c9a2e-….pdf", ...},
+                                        {"fileId": "c52e7f93-….pdf", ...}]}]
 
     In short: chunks are merged per asset, and evidence is listed per file (never per
     chunk or page).
