@@ -130,7 +130,34 @@ These trade-offs are explained in more detail in [FILTER_DILEMMAS.md](FILTER_DIL
 - For **compliance checks, reports or exports**, review each result, or add a verification step (an extra
   AI check that labels each result "matches" / "unclear").
 
-## 7. Open questions
+## 7. Planned: market sales data
+
+We plan to add a third source of information: a **table of market sales going back 5 years** (sales of
+artworks and assets across the market, not only the client's own).
+
+**When it's used:** whenever a question is about the market, for example "sales", "market sales",
+"total sales", "auction results" or "prices achieved":
+
+> "What were total sales for Picasso paintings at auction last year?"
+> "How does my Giacometti compare with recent market sales?"
+
+**How it fits the steps above:**
+- **Step 2 (understand)** gets a new part of the form: *is this a market sales question, and for what?*
+  (artist, type of work, period, date range, auction house…)
+- **Step 3/4** fetch the matching rows from the sales table, alongside the asset details and documents
+  when the question needs them too ("compare my asset with the market").
+- **Step 5** replies with the figures and the sales they're based on, so the user can check them.
+
+**Two rules for this source:**
+- **Totals, averages and counts are calculated by the database, not by the AI.** AI models are unreliable
+  at arithmetic; the AI only describes numbers it's given.
+- **Questions about the client's own assets still come only from that client's account.** Market sales are
+  shared data, but they must never reveal another client's holdings.
+
+**Open questions for this source:** what the table contains (columns, how artists and works are
+identified), how it's matched to the client's assets (same artist names?), and how often it's updated.
+
+## 8. Open questions
 
 1. Which uses need exact lists (compliance, reporting), and therefore a verification step?
 2. What do real users ask? Collect their questions, especially failed ones, to improve the search.
