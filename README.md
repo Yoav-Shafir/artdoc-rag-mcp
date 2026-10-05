@@ -58,7 +58,7 @@ overstone-rag/
 │   └── ask_list.json
 ├── docs/
 │   ├── RAG_IMPLEMENTATION_PLAN.md
-│   ├── DEPLOYMENT_PLAN.md
+│   ├── DEPLOYMENT.md
 │   └── HYBRID_QUERY_STRATEGY.md
 ├── config/
 │   ├── dev.json

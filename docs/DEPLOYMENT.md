@@ -1,4 +1,4 @@
-# AWS Deployment Plan: Web Platform RAG
+# Overstone AI Search: Deployment Guide
 
 ## Architecture Overview
 

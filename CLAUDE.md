@@ -9,7 +9,7 @@ Web Platform RAG answers questions about the documents (PDFs) attached to assets
 - **Ingestion:** MySQL lists an account's PDF files → each PDF is fetched from S3 → parsed with pypdf (scanned pages are OCR'd with AWS Textract) → chunked → embedded with AWS Bedrock Titan v2 → stored in ChromaDB.
 - **Query:** an LLM planner splits the user's query into SQL filters, a document query and a `kind`; SQL narrows the candidate assets only when there are filters; vector search runs within that scope; the result is either a written answer with citations (`answer`) or a ranked list of assets (`list`).
 
-Planned deployment: ingestion as a daily AWS Batch job, queries as a Lambda invoked by the platform server (see [docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md)).
+Deployment: ingestion as an AWS Batch job (started manually for now), queries as a Lambda invoked by the platform server (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 
 ## Active implementation plan
 
