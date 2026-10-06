@@ -3,33 +3,43 @@
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ AWS Environment (eu-west-1, private VPC)                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────────────┐          ┌──────────────────────┐     │
-│  │   AWS Batch Job      │          │   AWS Lambda         │     │
-│  │  (Ingestion)         │          │  (Search & Answer)   │     │
-│  │  • Fetch PDFs (S3)   │          │  • Safety check      │     │
-│  │  • Parse + OCR       │          │  • Plan the question │     │
-│  │  • Chunk + Embed     │          │  • SQL filters       │     │
-│  │  • Store in ChromaDB │          │  • Search ChromaDB   │     │
-│  │                      │          │  • Answer or list    │     │
-│  └──────────────────────┘          └──────────────────────┘     │
-│          │                                    │                 │
-│          └────────────────┬───────────────────┘                 │
-│                           │                                     │
-│          ┌────────────────┴────────────────┐                    │
-│          │   Shared Services               │                    │
-│          ├─────────────────────────────────┤                    │
-│          │ • RDS MySQL (file catalog)      │                    │
-│          │ • ChromaDB on EC2 (vectors)     │                    │
-│          │ • Bedrock (embeddings + LLM)    │                    │
-│          │ • Secrets Manager (DB login)    │                    │
-│          ├─────────────────────────────────┤                    │
-│          │ Batch only: S3 (PDFs), Textract │                    │
-│          │ Lambda only: Bedrock Guardrails │                    │
-│          └─────────────────────────────────┘                    │
+                                   ┌──────────────────────┐
+                                   │  Web platform client │
+                                   │  (browser, React)    │
+                                   └───────┬───────┬──────┘
+                               askAssetsAI │       ▲ results
+┌──────────────────────────────────────────┼───────┼──────────────┐
+│ AWS Environment (eu-west-1)              │       │              │
+├──────────────────────────────────────────┼───────┼──────────────┤
+│                                          │       │              │
+│ ┌────────────────────────────────────────┼───────┼────────────┐ │
+│ │  Private VPC                           ▼       │            │ │
+│ │                                ┌───────┴───────┴──────┐     │ │
+│ │                                │  Web platform server │     │ │
+│ │                                │  (Elastic Beanstalk) │     │ │
+│ │                                └───────┬───────┬──────┘     │ │
+│ │                                invokes ▼       ▲ reply      │ │
+│ │  ┌──────────────────────┐      ┌───────┴───────┴──────┐     │ │
+│ │  │  AWS Batch Job       │      │  AWS Lambda          │     │ │
+│ │  │  (Ingestion)         │      │  (Search & Answer)   │     │ │
+│ │  │  • Fetch PDFs (S3)   │      │  • Safety check      │     │ │
+│ │  │  • Parse + OCR       │      │  • Plan the question │     │ │
+│ │  │  • Chunk + Embed     │      │  • SQL filters       │     │ │
+│ │  │  • Store in ChromaDB │      │  • Search ChromaDB   │     │ │
+│ │  │                      │      │  • Answer or list    │     │ │
+│ │  └───────────┬──────────┘      └───────┬───────┬──────┘     │ │
+│ │              │ writes chunks           ▼       ▲            │ │
+│ │              └──────►──────┬─────◄─────┘       │            │ │
+│ │                            ▼                   │            │ │
+│ │              ┌─────────────┴─────────────┐     │            │ │
+│ │              │  EC2: wp-chromadb         │     │ chunks     │ │
+│ │              │  ChromaDB (vector store)  ├─►───┘            │ │
+│ │              │  10.0.30.114:8000         │                  │ │
+│ │              │  t3.small, 30GB disk      │                  │ │
+│ │              └───────────────────────────┘                  │ │
+│ │                                                             │ │
+│ │  RDS MySQL (file catalogue) is also only reachable here     │ │
+│ └─────────────────────────────────────────────────────────────┘ │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
