@@ -214,7 +214,7 @@ Assumes 100 questions a day and one ingestion run a day that only processes new 
 | **CloudWatch** | Batch and Lambda logs | $1–3 |
 | **RDS MySQL** | existing platform database (not new cost) | ($20–30) |
 | **S3** | existing platform bucket (not new cost) | ($2–3) |
-| **Total** | | **~$50–70**, of which **~$30 is new** for this project |
+| **Total** | | **about $30** (estimate) |
 
 Not included: the NAT gateway (already used by other systems), and the one-off first ingestion of an account (about $1–3 per 1,000 files, mostly Textract).
 
