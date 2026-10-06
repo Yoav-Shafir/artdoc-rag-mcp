@@ -36,7 +36,7 @@ overstone-rag/
 ├── events/                   # sample Lambda events + demo_queries.json
 ├── evals/questions.json
 ├── tests/                    # unit + integration tests
-├── docs/                     # DEPLOYMENT, HYBRID_QUERY_STRATEGY, RESPONSE_CONTRACT, FILTER_DILEMMAS
+├── docs/                     # ARCHITECTURE_AND_DEPLOYMENT, HYBRID_QUERY_STRATEGY, RESPONSE_CONTRACT, FILTER_DILEMMAS
 ├── compose.yaml              # local MinIO + ChromaDB
 ├── .env.example              # all settings, documented
 └── pyproject.toml, uv.lock
