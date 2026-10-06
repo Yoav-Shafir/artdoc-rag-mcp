@@ -1,4 +1,4 @@
-# Overstone AI Search: Deployment Guide
+# Overstone AI Search: Architecture and Deployment
 
 ## Architecture Overview
 

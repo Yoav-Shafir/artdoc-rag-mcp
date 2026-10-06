@@ -9,11 +9,11 @@ Web Platform RAG answers questions about the documents (PDFs) attached to assets
 - **Ingestion:** MySQL lists an account's PDF files → each PDF is fetched from S3 → parsed with pypdf (scanned pages are OCR'd with AWS Textract) → chunked → embedded with AWS Bedrock Titan v2 → stored in ChromaDB.
 - **Query:** an LLM planner splits the user's query into SQL filters, a document query and a `kind`; SQL narrows the candidate assets only when there are filters; vector search runs within that scope; the result is either a written answer with citations (`answer`) or a ranked list of assets (`list`).
 
-Deployment: ingestion as an AWS Batch job (started manually for now), queries as a Lambda invoked by the platform server (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+Deployment: ingestion as an AWS Batch job (started manually for now), queries as a Lambda invoked by the platform server (see [docs/ARCHITECTURE_AND_DEPLOYMENT.md](docs/ARCHITECTURE_AND_DEPLOYMENT.md)).
 
 ## Project docs
 
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): what runs in AWS, how to redeploy, configuration, costs, security gaps.
+- [docs/ARCHITECTURE_AND_DEPLOYMENT.md](docs/ARCHITECTURE_AND_DEPLOYMENT.md): what runs in AWS, how to redeploy, configuration, costs, security gaps.
 - [docs/HYBRID_QUERY_STRATEGY.md](docs/HYBRID_QUERY_STRATEGY.md): how a question is answered (plain language), known limits, planned market-sales data.
 - [docs/RESPONSE_CONTRACT.md](docs/RESPONSE_CONTRACT.md): the query response shape (keep in sync with `app/query.py`).
 - [docs/FILTER_DILEMMAS.md](docs/FILTER_DILEMMAS.md): exact filters vs similarity search, trade-offs and measured examples.

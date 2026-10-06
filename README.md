@@ -51,7 +51,7 @@ Local runs read settings from `.env` (copy `.env.example` to start).
 - **ChromaDB:** the local container on `localhost:8000`.
 
 The values used in AWS are in `config/dev.json` (Lambda) and `.env.prod`; see
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#configuration). To run a script locally against production
+[docs/ARCHITECTURE_AND_DEPLOYMENT.md](docs/ARCHITECTURE_AND_DEPLOYMENT.md#configuration). To run a script locally against production
 resources, copy the needed values from `.env.prod` into `.env` (only `.env` is read).
 
 ---
@@ -138,7 +138,7 @@ Access the MinIO web UI at **http://localhost:9001** to view and manage S3 bucke
 ## Environment Variables
 
 All settings are listed and explained in `.env.example`. The values used in AWS are in
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#configuration).
+[docs/ARCHITECTURE_AND_DEPLOYMENT.md](docs/ARCHITECTURE_AND_DEPLOYMENT.md#configuration).
 
 ## Verification Commands
 
@@ -195,7 +195,7 @@ docker compose down -v
 
 ## Deployment
 
-The architecture diagram, AWS services, configuration and redeploy steps are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The architecture diagram, AWS services, configuration and redeploy steps are in [docs/ARCHITECTURE_AND_DEPLOYMENT.md](docs/ARCHITECTURE_AND_DEPLOYMENT.md).
 The steps below record how the infrastructure was first set up.
 
 ### 1. VPC & Security Group Setup
@@ -312,7 +312,7 @@ aws secretsmanager describe-secret --secret-id web-platform-server-v2 --region e
 #### Configure environment
 
 The Lambda's settings come from `config/dev.json` (all keys are listed in
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#configuration)), for example:
+[docs/ARCHITECTURE_AND_DEPLOYMENT.md](docs/ARCHITECTURE_AND_DEPLOYMENT.md#configuration)), for example:
 ```json
 {
   "AWS_SECRET_NAME": "web-platform-server-v2",
