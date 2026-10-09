@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.43.102",
     "chromadb>=1.5.9",
+    "fastmcp>=4.0.11",
     "langchain-aws>=1.7.9",
     "langchain-core>=1.6.5",
     "langchain-text-splitters>=1.1.2",
@@ -53,3 +54,4 @@ batch = { cmd = "python -m app.batch_ingestion", help = "Daily ingestion job (AW
 eval = { cmd = "python -m app.eval", help = "Score search + answers against evals/questions.json (run pipeline first)" }
 demo = { cmd = "python scripts/run_demo.py", help = "Run the demo queries (events/demo_queries.json) against the deployed query Lambda" }
 mcp = { cmd = "python -m mcp_server.server", help = "Overstone MCP server (stdio, local test account; started by an AI assistant)" }
+inspector = { cmd = "fastmcp dev inspector -m mcp_server.server --reload-dir mcp_server --reload-dir app", help = "Open the MCP server in the MCP Inspector (browser UI to list and call tools); see docs/MCP_LOCAL_TESTING.md" }

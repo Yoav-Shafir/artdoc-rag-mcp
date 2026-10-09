@@ -10,7 +10,7 @@ Run (an assistant starts it for you, see docs/MCP_DESIGN.md):
 import json
 
 import boto3
-from mcp.server import MCPServer
+from fastmcp import FastMCP
 
 from app.config import config
 
@@ -18,10 +18,9 @@ from app.config import config
 TEST_ACCOUNT_ID = 46
 LAMBDA_NAME = "cdk-rag-query-dev"
 
-mcp = MCPServer(
-    name="overstone",
-    title="Overstone",
-    description="Search the documents attached to your Overstone assets.",
+mcp = FastMCP(
+    name="Overstone",
+    instructions="Search the documents attached to your Overstone assets.",
     version="0.1.0",
 )
 
@@ -37,7 +36,7 @@ def lambda_client():
     return _lambda_client
 
 
-@mcp.tool()
+@mcp.tool(title="Search documents")
 def search_documents(question: str) -> str:
     """Search the documents attached to the user's Overstone assets (invoices, valuations,
     provenance, certificates of authenticity, insurance, exhibition and loan documents).

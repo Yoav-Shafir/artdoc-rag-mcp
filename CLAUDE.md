@@ -17,6 +17,8 @@ Deployment: ingestion as an AWS Batch job (started manually for now), queries as
 - [docs/HYBRID_QUERY_STRATEGY.md](docs/HYBRID_QUERY_STRATEGY.md): how a question is answered (plain language), known limits, planned market-sales data.
 - [docs/RESPONSE_CONTRACT.md](docs/RESPONSE_CONTRACT.md): the query response shape (keep in sync with `app/query.py`).
 - [docs/FILTER_DILEMMAS.md](docs/FILTER_DILEMMAS.md): exact filters vs similarity search, trade-offs and measured examples.
+- [docs/MCP_AUTH_SETUP.md](docs/MCP_AUTH_SETUP.md): MCP connector sign-in (Cognito + FastMCP), decisions and commands log.
+- [docs/MCP_LOCAL_TESTING.md](docs/MCP_LOCAL_TESTING.md): running the MCP server locally and in the MCP Inspector.
 
 ## Commands
 
@@ -41,6 +43,8 @@ uv run poe                   # list all tasks (defined under [tool.poe.tasks] in
 uv run poe batch             # ingestion job (app/batch_ingestion.py): new PDFs in, deleted files out
 uv run poe ask "<query>"     # any query: plan -> (SQL) -> vector search -> answer or ranked list (app/query.py)
 uv run poe lambda events/ask_answer.json   # invoke the query Lambda handler locally (uses .env)
+uv run poe mcp               # MCP server over stdio (normally started by an AI assistant)
+uv run poe inspector         # MCP server in the MCP Inspector browser UI (docs/MCP_LOCAL_TESTING.md)
 uv run poe planner           # print the query plan for the sample prompts
 uv run poe eval              # score search + answers against evals/questions.json
 uv run poe copy-pdfs 46 --source-bucket <b> --destination-bucket <b>   # copy an account's PDFs between S3 buckets
