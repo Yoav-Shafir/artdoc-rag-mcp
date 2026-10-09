@@ -44,6 +44,7 @@ uv run poe batch             # ingestion job (app/batch_ingestion.py): new PDFs 
 uv run poe ask "<query>"     # any query: plan -> (SQL) -> vector search -> answer or ranked list (app/query.py)
 uv run poe lambda events/ask_answer.json   # invoke the query Lambda handler locally (uses .env)
 uv run poe mcp               # MCP server over stdio (normally started by an AI assistant)
+uv run poe mcp-http          # MCP server on http://localhost:8080/mcp with Cognito sign-in
 uv run poe inspector         # MCP server in the MCP Inspector browser UI (docs/MCP_LOCAL_TESTING.md)
 uv run poe planner           # print the query plan for the sample prompts
 uv run poe eval              # score search + answers against evals/questions.json

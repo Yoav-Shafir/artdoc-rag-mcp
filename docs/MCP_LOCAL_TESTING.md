@@ -44,5 +44,15 @@ password store that WSL doesn't have, and falls back to a file (`~/.mcp-inspecto
 
 | Command | What it does |
 |---|---|
-| `uv run poe mcp` | Runs the server over stdio. Normally an AI assistant (e.g. Claude Code) starts it, not you. |
+| `uv run poe mcp` | Runs the server over stdio, no sign-in. Normally an AI assistant (e.g. Claude Code) starts it, not you. |
+| `uv run poe mcp-http` | Runs the server at `http://localhost:8080/mcp` with Cognito sign-in. Port 8080 because ChromaDB uses 8000. |
 | Claude Code `overstone` MCP connection | Claude Code starts its own copy of the server; its process (`uv run --directory ... python -m mcp_server.server`) is not the Inspector's. |
+
+## Connect Claude Code to the http server (with sign-in)
+
+```bash
+uv run poe mcp-http                                                          # terminal 1: start the server
+claude mcp add --transport http overstone-http http://localhost:8080/mcp     # once; saved for this project only
+```
+In Claude Code, run `/mcp`, pick `overstone-http` and sign in on the Cognito page that opens.
+`claude mcp get overstone-http` should then show `Connected`.
