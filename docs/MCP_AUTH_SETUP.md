@@ -217,6 +217,21 @@ UPDATE user SET accountId = 46 WHERE id = 241 AND accountId = 7;
 
 Revert: `UPDATE user SET accountId = 7 WHERE id = 241;`
 
+### 8. Overstone logo and colour on the login page — done 2026-10-10 (checked: logo on, button `b82c30ff`)
+
+Updates the style from command 4. Logo: `web-platform-client-v2/src/assets/overstone_logo.png` (full logo),
+shown at the top of the form. Red from the logo ring (`#b82c30`, hover `#8f2226`) for the button, links and
+focus outline; light mode only (the page is light only). The request file was built from the current style
+(`describe-managed-login-branding --return-merged-resources`) with only those values changed, plus the logo as
+base64 in `Assets` (`Category FORM_LOGO, ColorMode LIGHT, Extension PNG`).
+
+```bash
+aws cognito-idp update-managed-login-branding --cli-input-json file://update.json \
+  --profile overstone --region eu-west-1
+```
+
+Revert (back to Cognito's default look): `aws cognito-idp update-managed-login-branding --user-pool-id eu-west-1_UTwJgz6im --managed-login-branding-id 8363afa5-5b4c-4172-912b-43f743e472ff --use-cognito-provided-values --profile overstone --region eu-west-1`
+
 ## Code: sign-in in the MCP server (2026-10-09)
 
 `mcp_server/server.py`, http mode only: `AWSCognitoProvider(user_pool_id, aws_region, client_id, client_secret,
@@ -247,4 +262,4 @@ Services", citing `YONA0004_2.pdf` page 1.
 3. ~~Run the MCP server locally with the adapter; create the app client with a localhost return address.~~
    Done (`uv run poe mcp-http`, port 8080, command 3 run).
 4. Test with Claude and one other client (VS Code or Cursor).
-5. Branding (logo, brand colour) for the login page.
+5. ~~Branding (logo, brand colour) for the login page.~~ Done (command 8).
