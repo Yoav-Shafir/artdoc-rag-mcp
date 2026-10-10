@@ -1,4 +1,4 @@
-"""Overstone MCP server: lets an AI assistant search Overstone documents (local only for now).
+"""Overstone MCP server: lets an AI assistant search Overstone documents.
 
 One tool, run on your machine. Signed-in users search their own account; without sign-in
 (stdio) a fixed test account is used. The tool calls the deployed AI search
@@ -8,6 +8,9 @@ Two ways to run it:
     uv run poe mcp        # stdio, no sign-in: an assistant on this machine starts it
     uv run poe mcp-http   # http://localhost:8080/mcp, users sign in with Overstone (Cognito)
 See docs/MCP_AUTH_SETUP.md for the sign-in setup.
+
+On AWS Lambda the same http server runs; its settings come from environment variables and
+Secrets Manager instead of .env (see load_secrets()).
 """
 
 import json
@@ -15,6 +18,29 @@ import os
 import sys
 
 import boto3
+
+
+def load_secrets() -> None:
+    """On Lambda: copy the database and Cognito secrets into the environment, before config loads."""
+    client = None
+    # Secret name -> the keys to copy from it
+    wanted = {
+        os.environ.get("AWS_SECRET_NAME"): ("RDS_HOSTNAME", "RDS_PORT", "RDS_USERNAME", "RDS_PASSWORD", "RDS_DB_NAME"),
+        os.environ.get("MCP_COGNITO_SECRET_NAME"): ("COGNITO_CLIENT_ID", "COGNITO_CLIENT_SECRET"),
+    }
+    for secret_name, keys in wanted.items():
+        if not secret_name:  # not set locally: .env is used instead
+            continue
+        client = client or boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+        secret = json.loads(client.get_secret_value(SecretId=secret_name)["SecretString"])
+        for key in keys:
+            if key in secret:
+                os.environ[key] = str(secret[key])
+
+
+# Must run before `app` is imported: app.config reads the environment at import time.
+load_secrets()
+
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.aws import AWSCognitoProvider
 from fastmcp.server.dependencies import get_access_token
@@ -26,11 +52,12 @@ from app.db.database import Database
 TEST_ACCOUNT_ID = 46
 LAMBDA_NAME = "cdk-rag-query-dev"
 
-# Sign-in (http only): the dev Cognito pool and the local address of this server.
+# Sign-in (http only): the dev Cognito pool and the public address of this server
+# (MCP_BASE_URL on Lambda, localhost otherwise).
 COGNITO_USER_POOL_ID = "eu-west-1_UTwJgz6im"
 COGNITO_REGION = "eu-west-1"
 HTTP_PORT = 8080
-BASE_URL = f"http://localhost:{HTTP_PORT}"
+BASE_URL = os.environ.get("MCP_BASE_URL", f"http://localhost:{HTTP_PORT}")
 
 mcp = FastMCP(
     name="Overstone",
