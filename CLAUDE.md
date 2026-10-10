@@ -45,6 +45,8 @@ uv run poe ask "<query>"     # any query: plan -> (SQL) -> vector search -> answ
 uv run poe lambda events/ask_answer.json   # invoke the query Lambda handler locally (uses .env)
 uv run poe mcp               # MCP server over stdio (normally started by an AI assistant)
 uv run poe mcp-http          # MCP server on http://localhost:8080/mcp with Cognito sign-in
+uv run poe mcp-dev           # docker compose up + platform MySQL, then mcp-http (one command for MCP work)
+uv run poe mcp-reset         # forget the MCP server's stored sign-ins (full sign-out steps: docs/MCP_LOCAL_TESTING.md)
 uv run poe inspector         # MCP server in the MCP Inspector browser UI (docs/MCP_LOCAL_TESTING.md)
 uv run poe planner           # print the query plan for the sample prompts
 uv run poe eval              # score search + answers against evals/questions.json

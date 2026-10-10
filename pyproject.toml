@@ -55,4 +55,6 @@ eval = { cmd = "python -m app.eval", help = "Score search + answers against eval
 demo = { cmd = "python scripts/run_demo.py", help = "Run the demo queries (events/demo_queries.json) against the deployed query Lambda" }
 mcp = { cmd = "python -m mcp_server.server", help = "Overstone MCP server (stdio, local test account; started by an AI assistant)" }
 mcp-http = { cmd = "python -m mcp_server.server --http", help = "Overstone MCP server on http://localhost:8080/mcp with Cognito sign-in" }
+mcp-dev = { shell = "docker compose up -d && docker start mysql && python -m mcp_server.server --http", help = "Start Docker services (MinIO, ChromaDB, the platform's MySQL), then the MCP server on http://localhost:8080/mcp" }
+mcp-reset = { shell = "rm -rf ~/.local/share/fastmcp/oauth-proxy && echo 'MCP server sign-ins cleared'", help = "Forget every sign-in the MCP server has stored (stop the server first); see docs/MCP_LOCAL_TESTING.md" }
 inspector = { cmd = "fastmcp dev inspector -m mcp_server.server --reload-dir mcp_server --reload-dir app", help = "Open the MCP server in the MCP Inspector (browser UI to list and call tools); see docs/MCP_LOCAL_TESTING.md" }

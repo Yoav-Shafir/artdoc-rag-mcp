@@ -1,6 +1,7 @@
 """Overstone MCP server: lets an AI assistant search Overstone documents (local only for now).
 
-One tool and a fixed test account, run on your machine. The tool calls the deployed AI search
+One tool, run on your machine. Signed-in users search their own account; without sign-in
+(stdio) a fixed test account is used. The tool calls the deployed AI search
 Lambda, so answers match the Overstone AI chat.
 
 Two ways to run it:
@@ -19,8 +20,9 @@ from fastmcp.server.auth.providers.aws import AWSCognitoProvider
 from fastmcp.server.dependencies import get_access_token
 
 from app.config import config
+from app.db.database import Database
 
-# Step 1 only: a fixed test account. Later the account comes from the signed-in user.
+# Used only without sign-in (stdio, Inspector): nobody is signed in, so there's no account to look up.
 TEST_ACCOUNT_ID = 46
 LAMBDA_NAME = "cdk-rag-query-dev"
 
@@ -38,6 +40,7 @@ mcp = FastMCP(
 
 # Created on first use, then reused for every tool call.
 _lambda_client = None
+_database = None
 
 
 def lambda_client():
@@ -46,6 +49,13 @@ def lambda_client():
         session = boto3.Session(profile_name=config.bedrock.aws_profile)  # your AWS profile from .env
         _lambda_client = session.client("lambda", region_name="eu-west-1")
     return _lambda_client
+
+
+def database():
+    global _database
+    if _database is None:
+        _database = Database()
+    return _database
 
 
 @mcp.tool(title="Search documents")
@@ -59,10 +69,16 @@ def search_documents(question: str) -> str:
     """
     token = get_access_token()  # None over stdio (no sign-in)
     if token:
-        print(f"search_documents by {token.claims.get('username')}: {question}", file=sys.stderr)
+        # The signed-in user's own account; never fall back to the test account.
+        account_id = database().account_for_user(token.claims["sub"])
+        print(f"search_documents by {token.claims.get('username')} (account {account_id}): {question}", file=sys.stderr)
+        if account_id is None:
+            return "Your sign-in isn't linked to an active Overstone user, so there's nothing to search."
+    else:
+        account_id = TEST_ACCOUNT_ID
     response = lambda_client().invoke(
         FunctionName=LAMBDA_NAME,
-        Payload=json.dumps({"query": question, "accountId": TEST_ACCOUNT_ID}),
+        Payload=json.dumps({"query": question, "accountId": account_id}),
     )
     result = json.loads(response["Payload"].read())
     return format_result(result)

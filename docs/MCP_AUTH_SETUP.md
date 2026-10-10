@@ -187,10 +187,35 @@ aws cognito-idp admin-set-user-password --user-pool-id eu-west-1_UTwJgz6im \
 unset TEST_PASSWORD
 ```
 
-This user exists only in Cognito, not in the platform's database; that's fine for testing sign-in
-(the account is still fixed to 46).
+### 6. Test user in the platform's MySQL — done 2026-10-09 (user id 241, profile id 241)
+
+Written to the dev MySQL with the user's OK, so the server can find the signed-in user's account.
+Account 7 (not 46), so the test user should not see account 46's documents. `identifier` is the Cognito
+user ID (`sub`), as for most platform users. User id 241 because profile rows 238–240 already exist
+without a matching user (left as they were).
+
+```sql
+START TRANSACTION;
+INSERT INTO user (id,identifier,email,name,mfa,roleId,accountId,enabled,authenticationStatus)
+VALUES (241,'52653454-c051-70be-3401-4a0e92df664b','mcptest@gmail.com','MCP Test','NO_MFA',4,7,1,'CONFIRMED');
+INSERT INTO profile (userId) VALUES (241);
+COMMIT;
+```
+
+Revert: `DELETE FROM user WHERE id = 241;` (the profile row goes with it, `ON DELETE CASCADE`).
 
 Revert: `aws cognito-idp admin-delete-user --user-pool-id eu-west-1_UTwJgz6im --username "$TEST_EMAIL" --profile overstone --region eu-west-1`
+
+### 7. Test user moved to account 46 — done 2026-10-10
+
+Written to the dev MySQL with the user's OK, so the test user can search account 46's documents
+(e.g. "Half of You"); on account 7 every such search returned "No documents found."
+
+```sql
+UPDATE user SET accountId = 46 WHERE id = 241 AND accountId = 7;
+```
+
+Revert: `UPDATE user SET accountId = 7 WHERE id = 241;`
 
 ## Code: sign-in in the MCP server (2026-10-09)
 
@@ -210,7 +235,7 @@ Documents. Still a fixed test account (46); the signed-in username is only logge
 | No login form on a second try | Cognito remembers the browser's login for a while (session cookie) | Expected; use a private window to see the form again |
 
 First successful sign-in from Claude Code (`overstone-http`): 2026-10-09. Connect steps in
-[MCP_LOCAL_TESTING.md](MCP_LOCAL_TESTING.md#connect-claude-code-to-the-http-server-with-sign-in).
+[MCP_LOCAL_TESTING.md](MCP_LOCAL_TESTING.md#connect-claude-code-to-the-mcp-server-with-sign-in).
 Test question "Who issued the invoice for Half of You?" → "Esthella Provas & Associates Art Advisory
 Services", citing `YONA0004_2.pdf` page 1.
 

@@ -235,6 +235,13 @@ class Database:
         )
         return {row["fileId"]: row["name"] for row in rows}
 
+    def account_for_user(self, cognito_id: str) -> Optional[int]:
+        """The account of a signed-in platform user (by Cognito user ID), or None if unknown or disabled."""
+        rows = self._query(
+            "SELECT accountId FROM user WHERE identifier = %(id)s AND enabled = 1", {"id": cognito_id}
+        )
+        return rows[0]["accountId"] if rows else None
+
     def close(self) -> None:
         if self._connection is not None and self._connection.open:
             self._connection.close()
