@@ -261,5 +261,7 @@ Services", citing `YONA0004_2.pdf` page 1.
    unit tests pass). Server switched from `MCPServer` to `FastMCP` (no sign-in yet); same answer as before.
 3. ~~Run the MCP server locally with the adapter; create the app client with a localhost return address.~~
    Done (`uv run poe mcp-http`, port 8080, command 3 run).
-4. Test with Claude and one other client (VS Code or Cursor).
+4. ~~Test with Claude and one other client (VS Code or Cursor).~~ Done 2026-10-10 with `mcptest@gmail.com`:
+   on account 7 the Half of You question returned "No documents found.", on account 46 the right answer
+   (command 7), so each signed-in user only sees their own account.
 5. ~~Branding (logo, brand colour) for the login page.~~ Done (command 8).
