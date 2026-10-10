@@ -44,9 +44,13 @@ load_secrets()
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.aws import AWSCognitoProvider
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.auth.jwt_issuer import derive_jwt_key
+from cryptography.fernet import Fernet
+from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
 from app.config import config
 from app.db.database import Database
+from mcp_server.dynamodb_store import DynamoDBStore
 
 # Used only without sign-in (stdio, Inspector): nobody is signed in, so there's no account to look up.
 TEST_ACCOUNT_ID = 46
@@ -147,6 +151,22 @@ def cognito_auth() -> AWSCognitoProvider:
         client_secret=os.environ["COGNITO_CLIENT_SECRET"],
         base_url=BASE_URL,  # Cognito sends users back to BASE_URL + /auth/callback
         forward_resource=False,  # Cognito rejects the login code if it gets our server URL as "resource"
+        client_storage=sign_in_storage(),
+    )
+
+
+def sign_in_storage():
+    """Where sign-ins are kept: a DynamoDB table on Lambda (MCP_SESSIONS_TABLE), else FastMCP's local folder."""
+    table = os.environ.get("MCP_SESSIONS_TABLE")
+    if not table:
+        return None  # FastMCP's default: ~/.local/share/fastmcp/oauth-proxy
+    # Encrypted the same way FastMCP encrypts its local folder (key derived from the Cognito client secret)
+    signing_key = derive_jwt_key(high_entropy_material=os.environ["COGNITO_CLIENT_SECRET"], salt="fastmcp-jwt-signing-key")
+    storage_key = derive_jwt_key(high_entropy_material=signing_key.decode(), salt="fastmcp-storage-encryption-key")
+    return FernetEncryptionWrapper(
+        key_value=DynamoDBStore(table, region_name=COGNITO_REGION),
+        fernet=Fernet(key=storage_key),
+        raise_on_decryption_error=False,
     )
 
 
