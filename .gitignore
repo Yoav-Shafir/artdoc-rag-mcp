@@ -30,3 +30,4 @@ cdk.out/
 
 # Demo run output (uv run poe demo)
 demo_results.json
+dummy_pdfs/

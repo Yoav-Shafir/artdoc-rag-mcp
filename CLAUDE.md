@@ -19,6 +19,7 @@ Deployment: ingestion as an AWS Batch job (started manually for now), queries as
 - [docs/FILTER_DILEMMAS.md](docs/FILTER_DILEMMAS.md): exact filters vs similarity search, trade-offs and measured examples.
 - [docs/MCP_AUTH_SETUP.md](docs/MCP_AUTH_SETUP.md): MCP connector sign-in (Cognito + FastMCP), decisions and commands log.
 - [docs/MCP_LOCAL_TESTING.md](docs/MCP_LOCAL_TESTING.md): running the MCP server locally and in the MCP Inspector.
+- [docs/DEMO_QUESTIONS.md](docs/DEMO_QUESTIONS.md): tested demo questions for the MCP connector (what works, what to avoid).
 
 ## Commands
 
@@ -51,6 +52,7 @@ uv run poe inspector         # MCP server in the MCP Inspector browser UI (docs/
 uv run poe planner           # print the query plan for the sample prompts
 uv run poe eval              # score search + answers against evals/questions.json
 uv run poe copy-pdfs 46 --source-bucket <b> --destination-bucket <b>   # copy an account's PDFs between S3 buckets
+uv run poe dummy-pdfs        # dummy invoice + provenance PDFs for the Giacometti test asset (docs/DEMO_QUESTIONS.md)
 uv run poe chroma            # print every record in the Chroma collection
 uv run poe verify            # service health checks
 uv run poe test              # unit tests; `uv run poe test -m integration` for integration tests

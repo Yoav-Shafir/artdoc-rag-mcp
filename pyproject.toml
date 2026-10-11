@@ -27,6 +27,7 @@ dev = [
     "poethepoet>=0.48.0",
     "pytest>=9.1.1",
     "pytest-mock>=3.15.1",
+    "reportlab>=5.0.1",
 ]
 
 [tool.pytest.ini_options]
@@ -43,6 +44,7 @@ addopts = "-m 'not integration'"
 [tool.poe.tasks]
 chroma = { cmd = "python scripts/show_chroma.py", help = "Print every record in the ChromaDB collection" }
 copy-pdfs = { cmd = "python scripts/copy_account_pdfs.py", help = "Copy an account's PDFs between S3 buckets (args: <accountId> --source-bucket <name> --destination-bucket <name>)" }
+dummy-pdfs = { cmd = "python scripts/make_dummy_pdfs.py", help = "Make dummy invoice + provenance PDFs for the Giacometti test asset (arg: output folder, default dummy_pdfs/)" }
 verify = { cmd = "python scripts/verify_services.py", help = "Check Docker, MinIO and ChromaDB health" }
 test = { cmd = "pytest", help = "Run unit tests (add -m integration for integration tests)" }
 pipeline = { cmd = "python -m app.happy_path", help = "Run the happy-path RAG pipeline (built step by step)" }
