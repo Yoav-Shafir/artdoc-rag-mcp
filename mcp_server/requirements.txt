@@ -1,0 +1,11 @@
+# MCP server Lambda dependencies only (versions match uv.lock).
+# boto3 is also in the Lambda runtime; pinned here so the bundle matches local testing.
+fastmcp==4.1.0
+mcp==2.3.0
+py-key-value-aio==0.4.6
+cryptography==50.0.2
+boto3==1.43.102
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+pymysql==1.2.3
+uvicorn==0.53.0

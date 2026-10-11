@@ -61,7 +61,7 @@ LAMBDA_NAME = "cdk-rag-query-dev"
 COGNITO_USER_POOL_ID = "eu-west-1_UTwJgz6im"
 COGNITO_REGION = "eu-west-1"
 HTTP_PORT = 8080
-BASE_URL = os.environ.get("MCP_BASE_URL", f"http://localhost:{HTTP_PORT}")
+BASE_URL = os.environ.get("MCP_BASE_URL") or f"http://localhost:{HTTP_PORT}"
 
 mcp = FastMCP(
     name="Overstone",
@@ -176,6 +176,7 @@ if __name__ == "__main__":
 
         load_dotenv()  # COGNITO_* are not part of app.config
         mcp.auth = cognito_auth()
-        mcp.run(transport="http", port=HTTP_PORT)
+        # Stateless + plain JSON replies: on Lambda each request may reach a different copy of the server
+        mcp.run(transport="http", port=HTTP_PORT, stateless_http=True, json_response=True)
     else:
         mcp.run()  # stdio: the assistant starts this program and talks to it directly

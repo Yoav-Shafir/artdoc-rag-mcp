@@ -232,6 +232,68 @@ aws cognito-idp update-managed-login-branding --cli-input-json file://update.jso
 
 Revert (back to Cognito's default look): `aws cognito-idp update-managed-login-branding --user-pool-id eu-west-1_UTwJgz6im --managed-login-branding-id 8363afa5-5b4c-4172-912b-43f743e472ff --use-cognito-provided-values --profile overstone --region eu-west-1`
 
+## Lambda deployment (dev, 2026-10-10)
+
+The same http server runs on Lambda `cdk-rag-mcp-dev` (stack `OverstoneLambdaRagMcpStackDev`,
+[cdk_rag/mcp_stack.py](../cdk_rag/mcp_stack.py)): Lambda Web Adapter layer + `mcp_server/run.sh`, in the
+platform VPC (for MySQL), public Function URL, sign-ins in DynamoDB `overstone-mcp-sessions-dev`.
+Address: `https://xkwq2fiks7vhvpo6przqokqwce0oorem.lambda-url.eu-west-1.on.aws/mcp`.
+
+### 9. Cognito client secret in Secrets Manager — done 2026-10-10
+
+Lambda has no `.env`; `load_secrets()` reads `COGNITO_CLIENT_ID` / `COGNITO_CLIENT_SECRET` from here.
+
+```bash
+set -a && . ./.env && set +a && aws secretsmanager create-secret --name overstone-mcp-cognito-dev \
+  --description "Cognito app client for the Overstone MCP server (dev)" \
+  --secret-string "$(python3 -c 'import json,os; print(json.dumps({"COGNITO_CLIENT_ID": os.environ["COGNITO_CLIENT_ID"], "COGNITO_CLIENT_SECRET": os.environ["COGNITO_CLIENT_SECRET"]}))')" \
+  --profile overstone --region eu-west-1
+```
+
+Revert: `aws secretsmanager delete-secret --secret-id overstone-mcp-cognito-dev --profile overstone --region eu-west-1`
+
+### 10. First deploy, then the server's own address — done 2026-10-10
+
+```bash
+AWS_PROFILE=overstone npx cdk deploy OverstoneLambdaRagMcpStackDev   # prints McpUrl
+```
+The address only exists after the first deploy: put it in `config/mcp-dev.json` (`MCP_BASE_URL`, no
+trailing `/`) and deploy again.
+
+### 11. Return address for the Lambda — done 2026-10-10 (checked: both addresses, other settings unchanged)
+
+Command 3 with both return addresses (the update replaces the whole list):
+
+```bash
+--callback-urls http://localhost:8080/auth/callback https://xkwq2fiks7vhvpo6przqokqwce0oorem.lambda-url.eu-west-1.on.aws/auth/callback
+```
+
+Revert: command 3 as written (localhost only).
+
+### 12. Allow the new secret through the VPC endpoint — done 2026-10-10
+
+The VPC's Secrets Manager endpoint (`vpce-0c12c3d78daed5e4a`, shared with the platform's Lambdas) only
+allowed the platform secret. Our secret was added; the platform line is unchanged.
+
+```bash
+aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0c12c3d78daed5e4a --policy-document '{
+  "Statement": [{
+    "Principal": "*",
+    "Action": "secretsmanager:GetSecretValue",
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:secretsmanager:eu-west-1:555547688340:secret:web-platform-server-v2-HfFF5q",
+      "arn:aws:secretsmanager:eu-west-1:555547688340:secret:overstone-mcp-cognito-dev-iFcxFT"
+    ]
+  }]
+}' --profile overstone --region eu-west-1
+```
+
+Revert (the original policy):
+```bash
+aws ec2 modify-vpc-endpoint --vpc-endpoint-id vpce-0c12c3d78daed5e4a --policy-document '{"Statement":[{"Principal":"*","Action":"secretsmanager:GetSecretValue","Effect":"Allow","Resource":["arn:aws:secretsmanager:eu-west-1:555547688340:secret:web-platform-server-v2-HfFF5q"]}]}' --profile overstone --region eu-west-1
+```
+
 ## Code: sign-in in the MCP server (2026-10-09)
 
 `mcp_server/server.py`, http mode only: `AWSCognitoProvider(user_pool_id, aws_region, client_id, client_secret,
@@ -247,6 +309,9 @@ Documents. Still a fixed test account (46); the signed-in username is only logge
 | Server won't start: `address already in use` on 8000 | ChromaDB uses 8000 | Port 8080 (command 3) |
 | Cognito page: "Login pages unavailable. Please contact an administrator." | Managed login v2 needs a style per app | Command 4 |
 | After login: server log `invalid_grant`, `GET /auth/callback` → 500 | FastMCP forwards `resource=http://localhost:8080/mcp` to Cognito, which rejects the code for an unregistered resource | `forward_resource=False` in `AWSCognitoProvider` |
+| Function URL answers `403`, Lambda never runs | Public Function URLs also need `lambda:InvokeFunction` (limited to URL calls) | `CfnPermission` with `InvokedViaFunctionUrl` in the stack |
+| Lambda `502`, log: `no VPC endpoint policy allows the secretsmanager:GetSecretValue action` | The VPC endpoint only allowed the platform secret | Command 12 |
+| `aioboto3` can't be installed (needs an older boto3) | FastMCP's DynamoDB store depends on it | Own small store, [mcp_server/dynamodb_store.py](../mcp_server/dynamodb_store.py) |
 | No login form on a second try | Cognito remembers the browser's login for a while (session cookie) | Expected; use a private window to see the form again |
 
 First successful sign-in from Claude Code (`overstone-http`): 2026-10-09. Connect steps in
